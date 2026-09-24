@@ -12,7 +12,7 @@ program
   .description('Multi-cloud operational health & cost intelligence')
   .version('1.0.0')
   .option('--provider <provider>',  'Cloud provider: aws | azure',        'aws')
-  .option('--days <number>',        'Analysis window in days',             '7')
+  .option('--days <number>',        'Analysis window in days',             '28')
   // AWS options
   .option('--region <region>',      'AWS region to analyse',               'us-east-1')
   // Azure options — values are read from --azure-env-file (a .sh-style

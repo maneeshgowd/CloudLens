@@ -128,125 +128,9 @@ function generateReport({ findings, summary, provider, days }) {
     SECRET_NO_ROTATION:  'This secret is being actively used but has automatic rotation disabled. A static credential that never rotates remains valid indefinitely — if it is ever leaked, there is no automatic recovery. AWS Secrets Manager supports fully-managed rotation for many secret types including RDS, Redshift, and custom Lambda-based rotators.',
   };
 
-  // ── Compliance mapping ─────────────────────────────────────────────────────
-  // Maps each finding type to the compliance controls it triggers.
-  const COMPLIANCE_MAP = {
-    DEPRECATED_RUNTIME: [
-      { framework: 'SOC 2',     control: 'CC7.1',    desc: 'Change management — unpatched runtime CVEs are a permanent open risk' },
-      { framework: 'CIS AWS',   control: 'Lambda.2', desc: 'Ensure Lambda functions do not use deprecated runtimes' },
-      { framework: 'ISO 27001', control: 'A.12.6.1', desc: 'Management of technical vulnerabilities' },
-    ],
-    ABANDONED: [
-      { framework: 'SOC 2',     control: 'CC6.3',    desc: 'Dead code retains live IAM access — logical access not deprovisioned' },
-      { framework: 'CIS AWS',   control: 'IAM.1',    desc: 'Least privilege — unused functions hold excess permissions' },
-      { framework: 'ISO 27001', control: 'A.9.2.5',  desc: 'Review of user access rights — stale function permissions not removed' },
-    ],
-    PIPELINE_SILENT: [
-      { framework: 'SOC 2',     control: 'CC7.2',    desc: 'System monitoring — broken pipeline was not detected by alerting' },
-      { framework: 'ISO 27001', control: 'A.12.4.1', desc: 'Event logging — pipeline failure went undetected' },
-    ],
-    ANOMALY_DROP: [
-      { framework: 'SOC 2',     control: 'CC7.2',    desc: 'System monitoring — traffic anomaly not caught by existing alarms' },
-      { framework: 'ISO 27001', control: 'A.16.1.2', desc: 'Reporting information security events — anomaly not surfaced' },
-    ],
-    HIGH_ERROR_RATE: [
-      { framework: 'SOC 2',     control: 'A1.2',     desc: 'Availability — sustained error rate breaches service availability commitments' },
-      { framework: 'ISO 27001', control: 'A.17.1.1', desc: 'Planning information security continuity' },
-    ],
-    MISSING_TAGS: [
-      { framework: 'SOC 2',     control: 'CC1.4',    desc: 'Resource accountability — untagged resources have no designated owner' },
-      { framework: 'CIS AWS',   control: 'TAG.1',    desc: 'Ensure all AWS resources have required tags applied' },
-      { framework: 'ISO 27001', control: 'A.8.1.1',  desc: 'Inventory of assets — untagged resources not in asset register' },
-    ],
-    NO_RETENTION: [
-      { framework: 'SOC 2',     control: 'CC7.2',    desc: 'Logging — indefinite retention may conflict with data handling policies' },
-      { framework: 'CIS AWS',   control: 'CW.1',     desc: 'Ensure log groups have a retention policy configured' },
-      { framework: 'ISO 27001', control: 'A.12.4.1', desc: 'Event logging — uncontrolled log retention period' },
-    ],
-    IDLE: [
-      { framework: 'SOC 2',     control: 'CC9.1',    desc: 'Risk assessment — idle resources increase attack surface unnecessarily' },
-      { framework: 'ISO 27001', control: 'A.8.1.4',  desc: 'Return of assets — unneeded resources should be decommissioned' },
-    ],
-    PC_IDLE: [
-      { framework: 'SOC 2',     control: 'CC9.1',    desc: 'Risk management — allocated capacity with zero utilisation' },
-    ],
-    PC_OVER_PROVISIONED: [
-      { framework: 'SOC 2',     control: 'CC9.1',    desc: 'Risk management — over-provisioned capacity with no justification' },
-    ],
-    OVER_ALLOCATED: [
-      { framework: 'SOC 2',     control: 'CC9.1',    desc: 'Risk management — configured resources significantly exceed actual usage' },
-    ],
-    THROTTLED: [
-      { framework: 'SOC 2',     control: 'A1.2',     desc: 'Availability — throttled invocations degrade service to users' },
-      { framework: 'ISO 27001', control: 'A.17.1.1', desc: 'Planning information security continuity' },
-    ],
-    DLQ_MESSAGES: [
-      { framework: 'SOC 2',     control: 'A1.2',     desc: 'Availability — unprocessed DLQ messages indicate downstream processing failures' },
-      { framework: 'ISO 27001', control: 'A.17.2.1', desc: 'Availability of information processing facilities' },
-    ],
-    STALE_MESSAGES: [
-      { framework: 'SOC 2',     control: 'A1.2',     desc: 'Availability — consumer stopped processing; queue backlog accumulating' },
-      { framework: 'ISO 27001', control: 'A.17.1.1', desc: 'Planning information security continuity' },
-    ],
-    MSK_OFFLINE: [
-      { framework: 'SOC 2',     control: 'A1.2',     desc: 'Availability — offline Kafka partitions block producers and consumers' },
-      { framework: 'ISO 27001', control: 'A.17.2.1', desc: 'Availability of information processing facilities' },
-    ],
-    MSK_DURABILITY_RISK: [
-      { framework: 'SOC 2',     control: 'C1.2',     desc: 'Processing integrity — low replication factor risks data loss on broker failure' },
-      { framework: 'ISO 27001', control: 'A.12.3.1', desc: 'Information backup — insufficient replication is a backup risk' },
-    ],
-    MSK_DISK_CRITICAL: [
-      { framework: 'SOC 2',     control: 'A1.2',     desc: 'Availability — full disks can cause broker failures and data loss' },
-      { framework: 'ISO 27001', control: 'A.12.1.3', desc: 'Capacity management — disk capacity not managed proactively' },
-    ],
-    MSK_IDLE: [
-      { framework: 'SOC 2',     control: 'CC9.1',    desc: 'Risk management — idle MSK cluster is a high-cost unnecessary asset' },
-      { framework: 'ISO 27001', control: 'A.8.1.4',  desc: 'Return of assets — idle cluster should be decommissioned' },
-    ],
-    MSK_UNDERUTILIZED: [
-      { framework: 'SOC 2',     control: 'CC9.1',    desc: 'Risk management — over-provisioned cluster relative to actual throughput' },
-    ],
-    S3_PUBLIC_ACCESS: [
-      { framework: 'SOC 2',     control: 'CC6.1',    desc: 'Logical access — publicly accessible storage is an unauthorised access risk' },
-      { framework: 'CIS AWS',   control: 'S3.2',     desc: 'Ensure S3 buckets have Block Public Access settings enabled' },
-      { framework: 'ISO 27001', control: 'A.9.4.1',  desc: 'Information access restriction — data must not be publicly accessible' },
-    ],
-    SG_OPEN_INGRESS: [
-      { framework: 'SOC 2',     control: 'CC6.6',    desc: 'Network access — open ingress provides direct internet access to internal resources' },
-      { framework: 'CIS AWS',   control: 'EC2.18',   desc: 'Ensure security groups do not allow unrestricted access to high-risk ports' },
-      { framework: 'ISO 27001', control: 'A.13.1.3', desc: 'Segregation in networks — unrestricted ingress violates network segregation' },
-    ],
-    IAM_KEY_STALE: [
-      { framework: 'SOC 2',     control: 'CC6.1',    desc: 'Logical access — stale credentials increase the window of compromise' },
-      { framework: 'CIS AWS',   control: 'IAM.3',    desc: 'Ensure access keys are rotated within 90 days' },
-      { framework: 'ISO 27001', control: 'A.9.4.3',  desc: 'Password management system — credentials must be regularly rotated' },
-    ],
-    SECRET_NO_ROTATION: [
-      { framework: 'SOC 2',     control: 'CC6.1',    desc: 'Logical access — non-rotating secrets are permanently valid if leaked' },
-      { framework: 'CIS AWS',   control: 'SecretsManager.1', desc: 'Ensure Secrets Manager secrets are configured with automatic rotation' },
-      { framework: 'ISO 27001', control: 'A.9.4.3',  desc: 'Password management — static credentials must be rotated regularly' },
-    ],
-  };
-
   const totalSavings  = findings.reduce((sum, f) => sum + (f.estimatedMonthlySavings || 0), 0);
   const totalSpend    = costCtx?.totalEstimatedCost ?? 0;
   const serviceCount  = Object.keys(byService).length;
-
-  // ── Compliance stats ───────────────────────────────────────────────────────
-  const COMP_FRAMEWORKS = ['SOC 2', 'CIS AWS', 'ISO 27001'];
-  const compControlsByFw  = { 'SOC 2': new Set(), 'CIS AWS': new Set(), 'ISO 27001': new Set() };
-  const compFindingsByFw  = { 'SOC 2': 0, 'CIS AWS': 0, 'ISO 27001': 0 };
-  for (const f of findings) {
-    const rules = COMPLIANCE_MAP[f.type] || [];
-    const seenFw = new Set();
-    for (const r of rules) {
-      if (compControlsByFw[r.framework]) compControlsByFw[r.framework].add(r.control);
-      if (!seenFw.has(r.framework)) { seenFw.add(r.framework); compFindingsByFw[r.framework]++; }
-    }
-  }
-  const totalCompFindings = findings.filter(f => (COMPLIANCE_MAP[f.type] || []).length > 0).length;
-  const totalUniqueControls = COMP_FRAMEWORKS.reduce((s, fw) => s + compControlsByFw[fw].size, 0);
 
   // ── Narrative ──────────────────────────────────────────────────────────────
   const narrativeParts = [];
@@ -293,9 +177,11 @@ function generateReport({ findings, summary, provider, days }) {
     </div>`;
   }).join('');
 
-  const chartLabels = Object.keys(byService);
-  const chartCounts = Object.values(byService);
-  const chartColors = chartLabels.map(s => serviceColors[s] || '#64748b');
+  // ── Insights chart data ────────────────────────────────────────────────────
+  const serviceList = Object.keys(byService).sort((a, b) => byService[b] - byService[a]).slice(0, 8);
+  const svcHigh = serviceList.map(s => findings.filter(f => f.service === s && f.priority === 'HIGH').length);
+  const svcMed  = serviceList.map(s => findings.filter(f => f.service === s && f.priority === 'MEDIUM').length);
+  const svcLow  = serviceList.map(s => findings.filter(f => f.service === s && f.priority === 'LOW').length);
 
   // ── Finding rows ──────────────────────────────────────────────────────────
   function typeLabel(type) {
@@ -344,21 +230,6 @@ function generateReport({ findings, summary, provider, days }) {
         <div class="explain-text">${escapeHtml(explainText)}</div>
       </div>` : '';
 
-    const compRules = COMPLIANCE_MAP[f.type] || [];
-    const compDetailHTML = compRules.length > 0 ? `
-      <div class="comp-detail-section">
-        <div class="explain-title">Compliance Controls</div>
-        ${compRules.map(r => {
-          const cls = r.framework === 'SOC 2' ? 'soc2' : r.framework === 'CIS AWS' ? 'cis' : 'iso';
-          const lbl = r.framework === 'ISO 27001' ? 'ISO' : r.framework;
-          return `<div class="comp-control-row">
-            <span class="comp-pill ${cls}">${escapeHtml(lbl)}</span>
-            <span class="comp-control-id">${escapeHtml(r.control)}</span>
-            <span class="comp-control-desc">${escapeHtml(r.desc)}</span>
-          </div>`;
-        }).join('')}
-      </div>` : '';
-
     return `
       <tr class="finding-row" id="frow-${idx}" onclick="toggleDetail(${idx})"
           data-priority="${f.priority}"
@@ -384,7 +255,6 @@ function generateReport({ findings, summary, provider, days }) {
             </div>
             <div class="detail-section">
               ${explainBox}
-              ${compDetailHTML}
               <h4>Recommendation</h4>
               <div class="recommendation">${escapeHtml(f.recommendation || '')}</div>
               <div class="resource-arn">${escapeHtml(f.resourceId || '')}</div>
@@ -426,9 +296,9 @@ function generateReport({ findings, summary, provider, days }) {
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
 
     /* ── Header ── */
-    .header { background: var(--surface); border-bottom: 1px solid var(--border); border-top: 3px solid var(--blue); padding: 0 2.5rem; display: flex; align-items: center; justify-content: space-between; height: 60px; }
+    .header { background: var(--surface); border-bottom: 1px solid var(--border); border-top: 3px solid var(--blue); padding: 0 2.5rem; display: flex; align-items: center; justify-content: space-between; height: 70px; }
     .header-brand { display: flex; align-items: center; gap: 0.875rem; }
-    .header-logo { font-size: 1.4rem; font-weight: 800; color: var(--text); letter-spacing: -0.7px; }
+    .header-logo { font-size: 1.85rem; font-weight: 800; color: var(--text); letter-spacing: -1px; }
     .header-logo span { color: var(--blue); }
     .header-badge { background: var(--surface-2); border: 1px solid var(--border); border-radius: 99px; padding: 0.2rem 0.7rem; font-size: 0.72rem; font-weight: 600; color: var(--muted); }
     .header-meta { font-size: 0.78rem; color: var(--muted); display: flex; gap: 1.25rem; }
@@ -452,11 +322,11 @@ function generateReport({ findings, summary, provider, days }) {
     .sum-item.spend  .sum-val  { color: #92400e; }
 
     /* ── Section headings ── */
-    .section-label { font-size: 0.68rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.6rem; }
-    .section-heading { font-size: 1.1rem; font-weight: 700; color: var(--text); margin-bottom: 0.75rem; display: flex; align-items: baseline; gap: 0.6rem; }
-    .section-heading .sh-sub { font-size: 0.82rem; font-weight: 400; color: var(--muted); }
-    .findings-heading { font-size: 1.25rem; font-weight: 800; color: var(--text); margin-bottom: 0.875rem; letter-spacing: -0.3px; display: flex; align-items: baseline; gap: 0.75rem; }
-    .findings-heading .fh-count { font-size: 0.85rem; font-weight: 500; color: var(--muted); }
+    .section-label { font-size: 0.7rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.6rem; }
+    .section-heading { font-size: 1.35rem; font-weight: 800; color: var(--text); margin-bottom: 1rem; display: flex; align-items: center; gap: 0.75rem; letter-spacing: -0.4px; padding-left: 0.85rem; border-left: 4px solid var(--blue); line-height: 1.2; }
+    .section-heading .sh-sub { font-size: 0.85rem; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+    .findings-heading { font-size: 1.5rem; font-weight: 800; color: var(--text); margin-bottom: 1rem; letter-spacing: -0.5px; display: flex; align-items: center; gap: 0.875rem; padding-left: 0.85rem; border-left: 4px solid var(--blue); line-height: 1.2; }
+    .findings-heading .fh-count { font-size: 0.88rem; font-weight: 500; color: var(--muted); letter-spacing: 0; }
 
     /* ── Service breakdown ── */
     .services-row { display: flex; gap: 1.5rem; align-items: flex-start; margin-bottom: 1.5rem; }
@@ -465,8 +335,11 @@ function generateReport({ findings, summary, provider, days }) {
     .service-icon-lg { width: 28px; height: 28px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; font-size: 0.55rem; font-weight: 800; color: white; margin-bottom: 0.3rem; }
     .svc-count { font-size: 1.1rem; font-weight: 700; color: var(--text); }
     .svc-name  { font-size: 0.62rem; color: var(--muted); margin-top: 0.1rem; }
-    .chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; box-shadow: var(--shadow); width: 220px; flex-shrink: 0; }
-    .chart-card canvas { max-height: 190px; }
+    /* ── Insights chart ── */
+    .insight-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem 1.5rem; box-shadow: var(--shadow); }
+    .insight-title { font-size: 1rem; font-weight: 700; color: var(--text); margin-bottom: 0.3rem; }
+    .insight-subtitle { font-size: 0.75rem; color: var(--muted); margin-bottom: 1.1rem; }
+    .insight-card canvas { max-height: 260px; }
 
     /* ── Narrative bar ── */
     .narrative-bar { background: #FFFBEB; border: 1px solid #FCD34D; border-left: 4px solid #F59E0B; border-radius: var(--radius); padding: 1rem 1.4rem; margin-bottom: 1.75rem; display: flex; flex-direction: column; gap: 0.6rem; }
@@ -564,8 +437,8 @@ function generateReport({ findings, summary, provider, days }) {
     /* ── Detail row ── */
     tr.detail-row td { background: var(--surface-2); padding: 1.1rem 1.5rem; border-top: 1px solid var(--border); }
     .detail-content { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
-    .detail-section h4 { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.6rem; font-weight: 700; }
-    .detail-section h4 .h4-sub { font-weight: 400; text-transform: none; letter-spacing: 0; }
+    .detail-section h4 { font-size: 0.72rem; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 0.65rem; font-weight: 800; border-bottom: 1px solid var(--border); padding-bottom: 0.35rem; }
+    .detail-section h4 .h4-sub { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); font-size: 0.72rem; }
     .metric-row { display: flex; justify-content: space-between; padding: 0.3rem 0; border-bottom: 1px solid var(--border); font-size: 0.8rem; }
     .metric-row:last-child { border-bottom: none; }
     .metric-label { color: var(--muted); }
@@ -576,7 +449,7 @@ function generateReport({ findings, summary, provider, days }) {
 
     /* "What does this mean?" */
     .type-explain-box { background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 6px; padding: 0.7rem 1rem; margin-bottom: 0.875rem; }
-    .explain-title { font-size: 0.62rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #92400E; margin-bottom: 0.35rem; }
+    .explain-title { font-size: 0.72rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; color: #92400E; margin-bottom: 0.4rem; }
     .explain-text  { font-size: 0.8rem; color: #78350F; line-height: 1.6; }
 
     /* ── Fix / Alarm commands ── */
@@ -602,34 +475,6 @@ function generateReport({ findings, summary, provider, days }) {
     .no-findings { text-align: center; padding: 3rem; color: var(--muted); font-size: 0.9rem; }
 
     footer { text-align: center; padding: 1.25rem; color: var(--muted); font-size: 0.72rem; border-top: 1px solid var(--border); margin-top: 2rem; }
-
-    /* ── Compliance ── */
-    .compliance-bar { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.5rem; margin-bottom: 1.75rem; display: flex; align-items: center; gap: 2rem; box-shadow: var(--shadow); }
-    .compliance-bar-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); min-width: 110px; }
-    .compliance-bar-label span { display: block; font-size: 1.05rem; font-weight: 800; color: var(--text); text-transform: none; letter-spacing: 0; margin-top: 0.15rem; }
-    .compliance-bar-label em { font-style: normal; font-size: 0.72rem; font-weight: 400; color: var(--muted); }
-    .compliance-fw-tiles { display: flex; gap: 0.75rem; flex-wrap: wrap; }
-    .compliance-fw-tile { border-radius: var(--radius); padding: 0.65rem 1.1rem; text-align: center; min-width: 110px; }
-    .compliance-fw-tile.soc2 { background: #F0FDF4; border: 1px solid #86EFAC; }
-    .compliance-fw-tile.cis  { background: #EFF6FF; border: 1px solid #93C5FD; }
-    .compliance-fw-tile.iso  { background: #F5F3FF; border: 1px solid #C4B5FD; }
-    .fw-tile-name     { font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-2); }
-    .fw-tile-controls { font-size: 1.3rem; font-weight: 800; line-height: 1.1; margin: 0.2rem 0 0.1rem; }
-    .compliance-fw-tile.soc2 .fw-tile-controls { color: #15803D; }
-    .compliance-fw-tile.cis  .fw-tile-controls { color: #1D4ED8; }
-    .compliance-fw-tile.iso  .fw-tile-controls { color: #6D28D9; }
-    .fw-tile-findings { font-size: 0.62rem; color: var(--muted); }
-    .comp-pill { display: inline-block; padding: 0.1rem 0.38rem; border-radius: 3px; font-size: 0.56rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; white-space: nowrap; }
-    .comp-pill.soc2 { background: #F0FDF4; color: #15803D; border: 1px solid #86EFAC; }
-    .comp-pill.cis  { background: #EFF6FF; color: #1D4ED8; border: 1px solid #93C5FD; }
-    .comp-pill.iso  { background: #F5F3FF; color: #6D28D9; border: 1px solid #C4B5FD; }
-    .comp-pills { margin-top: 0.3rem; display: flex; gap: 0.2rem; flex-wrap: wrap; }
-    .comp-detail-section { background: #FAFAFA; border: 1px solid var(--border); border-radius: 6px; padding: 0.65rem 0.875rem; margin-bottom: 0.75rem; }
-    .comp-detail-section .explain-title { color: #4B5563; }
-    .comp-control-row { display: flex; align-items: flex-start; gap: 0.5rem; padding: 0.3rem 0; border-bottom: 1px solid var(--border); font-size: 0.78rem; }
-    .comp-control-row:last-child { border-bottom: none; }
-    .comp-control-id   { font-family: 'SF Mono',Consolas,monospace; font-size: 0.7rem; font-weight: 700; color: var(--text-2); flex-shrink: 0; margin-top: 1px; }
-    .comp-control-desc { color: var(--muted); line-height: 1.45; }
 
     /* ── Print / PDF ── */
     @media print {
@@ -684,32 +529,19 @@ function generateReport({ findings, summary, provider, days }) {
 
   ${narrativeHTML}
 
-  <!-- Compliance impact bar -->
-  ${totalCompFindings > 0 ? `
-  <div class="compliance-bar">
-    <div class="compliance-bar-label">
-      Compliance Impact
-      <span>${totalUniqueControls} controls</span>
-      <em>${totalCompFindings} of ${findings.length} findings map to a framework</em>
-    </div>
-    <div class="compliance-fw-tiles">
-      ${COMP_FRAMEWORKS.filter(fw => compFindingsByFw[fw] > 0).map(fw => {
-        const cls  = fw === 'SOC 2' ? 'soc2' : fw === 'CIS AWS' ? 'cis' : 'iso';
-        return `<div class="compliance-fw-tile ${cls}">
-          <div class="fw-tile-name">${escapeHtml(fw)}</div>
-          <div class="fw-tile-controls">${compControlsByFw[fw].size}</div>
-          <div class="fw-tile-findings">${compFindingsByFw[fw]} finding${compFindingsByFw[fw] !== 1 ? 's' : ''}</div>
-        </div>`;
-      }).join('')}
-    </div>
-  </div>` : ''}
-
   <!-- Service breakdown -->
   ${Object.keys(byService).length > 0 ? `
   <div class="section-heading">Findings by Service <span class="sh-sub">${serviceCount} service${serviceCount !== 1 ? 's' : ''} affected</span></div>
   <div class="services-row">
     <div class="service-tiles">${serviceBreakdownHTML}</div>
-    <div class="chart-card"><canvas id="doughnut-chart"></canvas></div>
+  </div>` : ''}
+
+  <!-- Insights charts -->
+  ${serviceList.length > 0 ? `
+  <div class="insight-card" style="margin-bottom:1.75rem">
+    <div class="insight-title">Findings by Service &amp; Severity</div>
+    <div class="insight-subtitle">Breakdown of HIGH / MEDIUM / LOW findings per service</div>
+    <canvas id="severity-chart"></canvas>
   </div>` : ''}
 
   <!-- Finding browser -->
@@ -781,19 +613,30 @@ function generateReport({ findings, summary, provider, days }) {
   var activeTypeFilter = 'ALL';
   var activeSearch     = '';
 
-  // ── Doughnut chart ────────────────────────────────────────────────────────
+  // ── Severity by service chart ─────────────────────────────────────────────
   (function() {
-    var canvas = document.getElementById('doughnut-chart');
+    var canvas = document.getElementById('severity-chart');
     if (!canvas || typeof Chart === 'undefined') return;
     new Chart(canvas, {
-      type: 'doughnut',
+      type: 'bar',
       data: {
-        labels: ${JSON.stringify(chartLabels)},
-        datasets: [{ data: ${JSON.stringify(chartCounts)}, backgroundColor: ${JSON.stringify(chartColors)}, borderWidth: 2, borderColor: '#FFFFFF' }]
+        labels: ${JSON.stringify(serviceList)},
+        datasets: [
+          { label: 'HIGH',   data: ${JSON.stringify(svcHigh)}, backgroundColor: 'rgba(220,38,38,0.85)',  borderRadius: 3 },
+          { label: 'MEDIUM', data: ${JSON.stringify(svcMed)},  backgroundColor: 'rgba(234,88,12,0.85)',  borderRadius: 3 },
+          { label: 'LOW',    data: ${JSON.stringify(svcLow)},  backgroundColor: 'rgba(217,119,6,0.75)',  borderRadius: 3 },
+        ]
       },
       options: {
-        plugins: { legend: { position: 'bottom', labels: { color: '#64748B', font:{ size: 10 }, padding: 6, boxWidth: 10 } } },
-        cutout: '68%',
+        indexAxis: 'y',
+        responsive: true,
+        plugins: {
+          legend: { position: 'bottom', labels: { color:'#64748B', font:{ size:11 }, padding:14, boxWidth:12 } }
+        },
+        scales: {
+          x: { stacked: true, grid: { color:'#F1F5F9' }, ticks: { color:'#64748B', font:{ size:11 } } },
+          y: { stacked: true, grid: { display:false },   ticks: { color:'#334155', font:{ size:11 } } }
+        }
       }
     });
   })();
