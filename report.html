@@ -1,0 +1,1860 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CloudLens — AWS Health &amp; Cost Report</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a; --surface: #1e293b; --surface-2: #243044;
+      --text: #e2e8f0; --muted: #94a3b8; --border: #334155;
+      --high: #ef4444; --medium: #f97316; --low: #eab308;
+      --aws: #FF9900; --blue: #3b82f6; --green: #22c55e;
+      --radius: 10px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
+
+    /* ── Header ── */
+    .header { background: linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 60%, #4f46e5 100%); padding: 1.75rem 2.5rem; display: flex; align-items: center; justify-content: space-between; }
+    .header h1 { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.5px; }
+    .header h1 .lens { color: #93c5fd; }
+    .header-tagline { color: #bfdbfe; font-size: 0.8rem; margin-top: 0.2rem; }
+    .header-right { text-align: right; color: #bfdbfe; font-size: 0.8rem; line-height: 1.8; }
+    .header-right strong { color: white; }
+
+    .container { max-width: 1440px; margin: 0 auto; padding: 2rem 2.5rem; }
+    .section-title { font-size: 0.7rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.75rem; }
+
+    /* ── Cost context bar ── */
+    .cost-context-bar { background: rgba(59,130,246,0.08); border: 1px solid rgba(59,130,246,0.2); border-radius: var(--radius); padding: 0.75rem 1.25rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem; font-size: 0.8rem; }
+    .cost-label { color: var(--muted); }
+    .cost-total { font-size: 1.1rem; font-weight: 700; color: var(--aws); }
+    .cost-services { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .cost-chip { background: var(--surface); border: 1px solid var(--border); border-radius: 99px; padding: 0.2rem 0.6rem; color: var(--muted); font-size: 0.72rem; }
+    .cost-chip strong { color: var(--text); }
+    .cost-savings-pill { background: rgba(34,197,94,0.15); border: 1px solid rgba(34,197,94,0.3); border-radius: 99px; padding: 0.2rem 0.75rem; color: #4ade80; font-size: 0.75rem; font-weight: 700; }
+
+    /* ── Stats ── */
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1rem; margin-bottom: 1.75rem; }
+    .stat-card { background: var(--surface); border-radius: var(--radius); padding: 1.25rem 1.5rem; border: 1px solid var(--border); }
+    .stat-value { font-size: 2.2rem; font-weight: 800; line-height: 1; }
+    .stat-label { color: var(--muted); font-size: 0.75rem; margin-top: 0.3rem; text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat-card.high    .stat-value { color: var(--high); }
+    .stat-card.medium  .stat-value { color: var(--medium); }
+    .stat-card.low     .stat-value { color: var(--low); }
+    .stat-card.total   .stat-value { color: #60a5fa; }
+    .stat-card.spend   .stat-value { color: var(--aws); }
+    .stat-card.savings .stat-value { color: var(--green); }
+    .stat-card.scanned .stat-value { color: var(--muted); }
+    .stat-card.anomaly .stat-value { color: #f87171; }
+    .stat-card.runtime .stat-value { color: #fb923c; }
+    .stat-card.tags    .stat-value { color: #94a3b8; }
+    .stat-card.pipeline   .stat-value { color: #fb923c; }
+    .stat-card.abandoned  .stat-value { color: #fca5a5; }
+
+    /* ── Dashboard row ── */
+    .dashboard-row { display: grid; grid-template-columns: 1fr 280px; gap: 1.5rem; margin-bottom: 1.75rem; align-items: start; }
+    .service-breakdown { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+    .service-tile { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); padding: 1rem 1.25rem; text-align: center; min-width: 100px; }
+    .service-icon-lg { width: 36px; height: 36px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 800; color: white; margin-bottom: 0.5rem; }
+    .svc-count { font-size: 1.4rem; font-weight: 700; color: var(--aws); }
+    .svc-name  { font-size: 0.7rem; color: var(--muted); margin-top: 0.15rem; }
+    .chart-card { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); padding: 1.25rem; }
+    .chart-card canvas { max-height: 220px; }
+
+    /* ── Toolbar ── */
+    .toolbar { display: flex; gap: 0.75rem; margin-bottom: 1rem; align-items: center; flex-wrap: wrap; }
+    .search-wrap { flex: 1; min-width: 200px; position: relative; }
+    .search-wrap input { width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.75rem 0.5rem 2rem; color: var(--text); font-size: 0.85rem; outline: none; }
+    .search-wrap input:focus { border-color: var(--blue); }
+    .search-wrap input::placeholder { color: var(--muted); }
+    .search-icon { position: absolute; left: 0.6rem; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 0.8rem; pointer-events: none; }
+    .filter-bar { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+    .filter-label { color: var(--muted); font-size: 0.75rem; }
+    .filter-btn { padding: 0.35rem 0.875rem; border-radius: 99px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: 0.75rem; cursor: pointer; transition: all 0.15s; }
+    .filter-btn:hover { color: var(--text); border-color: var(--blue); }
+    .filter-btn.active { background: rgba(59,130,246,0.15); border-color: var(--blue); color: #93c5fd; }
+    .filter-btn.high.active   { background: rgba(239,68,68,0.15);  border-color: var(--high);   color: #f87171; }
+    .filter-btn.medium.active { background: rgba(249,115,22,0.15); border-color: var(--medium); color: #fb923c; }
+    .filter-btn.low.active    { background: rgba(234,179,8,0.15);  border-color: var(--low);    color: #facc15; }
+    .filter-btn.env-prod.active { background: rgba(239,68,68,0.15);  border-color: var(--high);   color: #f87171; }
+    .filter-btn.env-tst.active  { background: rgba(249,115,22,0.15); border-color: var(--medium); color: #fb923c; }
+    .filter-btn.env-dev.active  { background: rgba(59,130,246,0.15); border-color: var(--blue);   color: #93c5fd; }
+    .csv-btn { padding: 0.4rem 1rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: 0.75rem; cursor: pointer; white-space: nowrap; }
+    .csv-btn:hover { color: var(--text); border-color: var(--green); }
+    .toolbar-divider { width: 1px; height: 24px; background: var(--border); }
+
+    /* ── Table ── */
+    .table-wrapper { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; }
+    thead th { background: var(--surface-2); padding: 0.75rem 1rem; text-align: left; font-weight: 600; color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
+    tbody tr.finding-row { border-top: 1px solid var(--border); cursor: pointer; transition: background 0.1s; }
+    tbody tr.finding-row:hover { background: var(--surface-2); }
+    tbody tr.finding-row.filtered { display: none; }
+    tbody tr.detail-row { display: none; }
+    tbody tr.detail-row.open { display: table-row; }
+    tbody tr.detail-row.filtered { display: none !important; }
+    td { padding: 0.75rem 1rem; vertical-align: middle; }
+
+    .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 99px; font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
+    .badge-HIGH   { background: rgba(239,68,68,0.15);  color: #f87171; border: 1px solid rgba(239,68,68,0.4); }
+    .badge-MEDIUM { background: rgba(249,115,22,0.15); color: #fb923c; border: 1px solid rgba(249,115,22,0.4); }
+    .badge-LOW    { background: rgba(234,179,8,0.15);  color: #facc15; border: 1px solid rgba(234,179,8,0.4); }
+    .badge-type   { background: rgba(148,163,184,0.1); color: #94a3b8; border: 1px solid rgba(148,163,184,0.2); font-size: 0.6rem; }
+    .badge-type-ANOMALY_DROP       { background: rgba(239,68,68,0.15);  color: #f87171; border: 1px solid rgba(239,68,68,0.4); }
+    .badge-type-PIPELINE_SILENT    { background: rgba(249,115,22,0.15); color: #fb923c; border: 1px solid rgba(249,115,22,0.4); }
+    .badge-type-DEPRECATED_RUNTIME { background: rgba(239,68,68,0.15);  color: #f87171; border: 1px solid rgba(239,68,68,0.4); }
+    .badge-type-MISSING_TAGS       { background: rgba(100,116,139,0.1); color: #94a3b8; border: 1px solid rgba(100,116,139,0.25); }
+    .badge-type-ABANDONED          { background: rgba(220,38,38,0.2);   color: #fca5a5; border: 1px solid rgba(220,38,38,0.5); font-weight: 800; }
+
+    /* ── Environment + team badges ── */
+    .env-badge { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.58rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-right: 0.3rem; vertical-align: middle; }
+    .env-prod    { background: rgba(239,68,68,0.2);  color: #f87171; border: 1px solid rgba(239,68,68,0.35); }
+    .env-tst     { background: rgba(249,115,22,0.2); color: #fb923c; border: 1px solid rgba(249,115,22,0.35); }
+    .env-dev     { background: rgba(59,130,246,0.2); color: #93c5fd; border: 1px solid rgba(59,130,246,0.35); }
+    .env-unknown { background: rgba(100,116,139,0.2); color: #94a3b8; border: 1px solid rgba(100,116,139,0.3); }
+    .team-badge  { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.58rem; font-weight: 600; background: rgba(139,92,246,0.15); color: #a78bfa; border: 1px solid rgba(139,92,246,0.3); margin-right: 0.3rem; vertical-align: middle; }
+
+    .service-icon-sm { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 5px; font-size: 0.55rem; font-weight: 800; color: white; margin-right: 0.4rem; vertical-align: middle; }
+    .resource-name { font-family: 'SF Mono','Cascadia Code','Fira Code',Consolas,monospace; font-size: 0.8rem; }
+    .details-cell  { color: var(--muted); max-width: 360px; }
+    .chevron-cell  { color: var(--muted); font-size: 0.8rem; width: 30px; }
+    .savings-cell  { white-space: nowrap; }
+    .savings-badge { background: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid rgba(34,197,94,0.3); border-radius: 99px; padding: 0.2rem 0.55rem; font-size: 0.7rem; font-weight: 700; }
+    .savings-nil   { color: #475569; font-size: 0.8rem; }
+
+    /* ── Detail row ── */
+    tr.detail-row td { background: #131f33; padding: 1.25rem 1.5rem; border-top: 1px solid var(--border); }
+    .detail-content { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
+    .detail-section h4 { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.6rem; font-weight: 600; }
+    .metric-row { display: flex; justify-content: space-between; padding: 0.3rem 0; border-bottom: 1px solid var(--border); font-size: 0.8rem; }
+    .metric-row:last-child { border-bottom: none; }
+    .metric-label { color: var(--muted); }
+    .metric-value { font-weight: 600; font-family: 'SF Mono',Consolas,monospace; }
+    .recommendation { background: rgba(59,130,246,0.08); border: 1px solid rgba(59,130,246,0.25); border-radius: 8px; padding: 0.75rem 1rem; font-size: 0.8rem; color: #93c5fd; line-height: 1.6; white-space: pre-wrap; }
+    .resource-arn { margin-top: 0.5rem; font-size: 0.7rem; color: #475569; font-family: monospace; word-break: break-all; }
+
+    /* ── Alarm / remediation section ── */
+    .alarm-section { margin-top: 1rem; }
+    .alarm-section h4 { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.5rem; font-weight: 600; }
+    .alarm-command { background: #0d1929; border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 1rem; font-family: 'SF Mono','Cascadia Code',Consolas,monospace; font-size: 0.72rem; color: #7dd3fc; white-space: pre; overflow-x: auto; margin-bottom: 0.5rem; line-height: 1.7; }
+    .copy-btn { padding: 0.3rem 0.85rem; background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3); border-radius: 6px; color: #93c5fd; font-size: 0.72rem; cursor: pointer; transition: background 0.15s; }
+    .copy-btn:hover { background: rgba(59,130,246,0.3); }
+    .copy-btn.copied { color: #4ade80; border-color: rgba(34,197,94,0.4); background: rgba(34,197,94,0.1); }
+
+    /* ── Executive summary ── */
+    .exec-summary { background: linear-gradient(135deg, rgba(30,58,138,0.25), rgba(79,70,229,0.1)); border: 1px solid rgba(99,102,241,0.3); border-radius: var(--radius); padding: 1.75rem 2rem; margin-bottom: 1.75rem; }
+    .exec-headline { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
+    .exec-metric { text-align: center; padding: 0.5rem; }
+    .exec-metric-value { font-size: 2.8rem; font-weight: 800; line-height: 1; }
+    .exec-metric-label { font-size: 0.75rem; font-weight: 600; margin-top: 0.35rem; text-transform: uppercase; letter-spacing: 0.5px; }
+    .exec-metric-sub { font-size: 0.68rem; color: var(--muted); margin-top: 0.2rem; }
+    .exec-metric.health .exec-metric-value   { color: #f87171; }
+    .exec-metric.health .exec-metric-label   { color: #f87171; }
+    .exec-metric.security .exec-metric-value { color: #fb923c; }
+    .exec-metric.security .exec-metric-label { color: #fb923c; }
+    .exec-metric.waste .exec-metric-value    { color: #4ade80; }
+    .exec-metric.waste .exec-metric-label    { color: #4ade80; }
+    .exec-divider { height: 1px; background: var(--border); margin-bottom: 1.25rem; }
+    .exec-actions-title { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; font-weight: 600; margin-bottom: 0.75rem; }
+    .action-card { display: flex; gap: 1rem; padding: 0.75rem 0; border-bottom: 1px solid rgba(51,65,85,0.5); align-items: flex-start; }
+    .action-card:last-child { border-bottom: none; padding-bottom: 0; }
+    .action-num { font-size: 1.3rem; color: #818cf8; font-weight: 800; min-width: 1.75rem; line-height: 1.4; }
+    .action-body { flex: 1; }
+    .action-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.3rem; flex-wrap: wrap; }
+    .action-service { font-size: 0.72rem; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 0.1rem 0.4rem; }
+    .action-resource { font-family: 'SF Mono','Cascadia Code',Consolas,monospace; font-size: 0.8rem; color: var(--text); font-weight: 600; }
+    .action-detail { font-size: 0.8rem; color: var(--muted); line-height: 1.5; }
+
+    .no-findings { text-align: center; padding: 3rem; color: var(--muted); font-size: 0.9rem; }
+    footer { text-align: center; padding: 1.5rem; color: #475569; font-size: 0.75rem; border-top: 1px solid var(--border); margin-top: 2rem; }
+  </style>
+</head>
+<body>
+<div class="header">
+  <div>
+    <h1>Cloud<span class="lens">Lens</span></h1>
+    <div class="header-tagline">Operational Health &amp; Cost Intelligence — AWS</div>
+  </div>
+  <div class="header-right">
+    <div>Generated <strong>Mon, 21 Sep 2026 11:16:23 GMT</strong></div>
+    <div>Analysis window <strong>last 14 days</strong></div>
+  </div>
+</div>
+
+<div class="container">
+
+  <div class="exec-summary">
+    <div class="exec-headline">
+      <div class="exec-metric health">
+        <div class="exec-metric-value">6</div>
+        <div class="exec-metric-label">Active Health Issues</div>
+        <div class="exec-metric-sub">errors · anomalies · silent pipelines</div>
+      </div>
+      <div class="exec-metric security">
+        <div class="exec-metric-value">3</div>
+        <div class="exec-metric-label">Security Risks</div>
+        <div class="exec-metric-sub">EOL or deprecated runtimes</div>
+      </div>
+      <div class="exec-metric waste">
+        <div class="exec-metric-value">$217</div>
+        <div class="exec-metric-label">Est. Annual Waste</div>
+        <div class="exec-metric-sub">recoverable with no architectural changes</div>
+      </div>
+    </div>
+    <div class="exec-divider"></div>
+    <div class="exec-actions-title">Top Actions Right Now</div><div class="action-card">
+      <div class="action-num">①</div>
+      <div class="action-body">
+        <div class="action-header">
+          <span class="badge badge-HIGH">HIGH</span>
+          <span class="action-service">Provisioned Concurrency</span>
+          <span class="action-resource">io-dtdl-prd-graphql</span>
+        </div>
+        <div class="action-detail">1 units provisioned — zero concurrent executions in last 14 days. Burning $18.06/month with no traffic. · ~$18.06/mo</div>
+      </div>
+    </div><div class="action-card">
+      <div class="action-num">②</div>
+      <div class="action-body">
+        <div class="action-header">
+          <span class="badge badge-HIGH">HIGH</span>
+          <span class="action-service">Lambda</span>
+          <span class="action-resource">io-credential-s3-prd-custom-resource-existing-s3</span>
+        </div>
+        <div class="action-detail">Runtime nodejs16.x is EOL — Node.js 16 no longer receives security patches</div>
+      </div>
+    </div><div class="action-card">
+      <div class="action-num">③</div>
+      <div class="action-body">
+        <div class="action-header">
+          <span class="badge badge-HIGH">HIGH</span>
+          <span class="action-service">Lambda</span>
+          <span class="action-resource">io-webhooks-prd-reportDeliveryFailure</span>
+        </div>
+        <div class="action-detail">Runtime nodejs16.x is EOL — Node.js 16 no longer receives security patches</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-title">At a Glance</div>
+  <div class="stats-grid">
+    <div class="stat-card scanned"><div class="stat-value">133</div><div class="stat-label">Resources Scanned</div></div>
+    <div class="stat-card total"><div class="stat-value">44</div><div class="stat-label">Total Findings</div></div>
+    <div class="stat-card high"><div class="stat-value">26</div><div class="stat-label">High Priority</div></div>
+    <div class="stat-card abandoned"><div class="stat-value">5</div><div class="stat-label">Abandoned (28d+)</div></div>
+    
+    <div class="stat-card pipeline"><div class="stat-value">6</div><div class="stat-label">Silent Pipelines</div></div>
+    <div class="stat-card runtime"><div class="stat-value">3</div><div class="stat-label">Deprecated Runtimes</div></div>
+    <div class="stat-card medium"><div class="stat-value">11</div><div class="stat-label">Medium Priority</div></div>
+    <div class="stat-card low"><div class="stat-value">7</div><div class="stat-label">Low Priority</div></div>
+    <div class="stat-card spend"><div class="stat-value">$339</div><div class="stat-label">Est. Monthly Spend</div></div>
+    <div class="stat-card savings"><div class="stat-value">$18.06</div><div class="stat-label">Recoverable/mo</div></div>
+    <div class="stat-card tags"><div class="stat-value">1</div><div class="stat-label">Untagged Resources</div></div>
+  </div>
+
+  <div class="cost-context-bar">
+    <span class="cost-label">Est. monthly spend:</span>
+    <span class="cost-total">$338.91<span style="font-size:0.7rem;opacity:0.7">/mo</span></span>
+    <span class="cost-savings-pill">↓ $18.06/mo recoverable</span>
+    <span class="cost-services"><span class="cost-chip">Provisioned Concurrency: <strong>$276.98</strong></span><span class="cost-chip">Lambda: <strong>$50.63</strong></span><span class="cost-chip">DynamoDB: <strong>$7.83</strong></span><span class="cost-chip">API Gateway: <strong>$1.65</strong></span><span class="cost-chip">Secrets Manager: <strong>$1.60</strong></span><span class="cost-chip">CloudFront: <strong>$0.23</strong></span></span>
+  </div>
+
+  
+  <div class="section-title">Breakdown</div>
+  <div class="dashboard-row">
+    <div class="service-breakdown"><div class="service-tile"><div class="service-icon-lg" style="background:#FF9900">λ</div><div class="svc-count">27</div><div class="svc-name">Lambda</div></div><div class="service-tile"><div class="service-icon-lg" style="background:#E7157B">EB</div><div class="svc-count">9</div><div class="svc-name">EventBridge</div></div><div class="service-tile"><div class="service-icon-lg" style="background:#7AA116">S3</div><div class="svc-count">3</div><div class="svc-name">S3</div></div><div class="service-tile"><div class="service-icon-lg" style="background:#9333ea">SQS</div><div class="svc-count">2</div><div class="svc-name">SQS</div></div><div class="service-tile"><div class="service-icon-lg" style="background:#f59e0b">PC</div><div class="svc-count">1</div><div class="svc-name">Provisioned Concurrency</div></div><div class="service-tile"><div class="service-icon-lg" style="background:#64748b">NAT</div><div class="svc-count">1</div><div class="svc-name">NAT Gateway</div></div><div class="service-tile"><div class="service-icon-lg" style="background:#0ea5e9">CF</div><div class="svc-count">1</div><div class="svc-name">CloudFront</div></div></div>
+    <div class="chart-card"><canvas id="doughnut-chart"></canvas></div>
+  </div>
+
+  <div class="toolbar">
+    <div class="search-wrap">
+      <span class="search-icon">⌕</span>
+      <input type="text" id="search-input" placeholder="Search resource name..." oninput="applySearch(this.value)">
+    </div>
+    <div class="filter-bar">
+      <span class="filter-label">Priority:</span>
+      <button class="filter-btn priority-btn active" onclick="setPriorityFilter('ALL',this)">All (44)</button>
+      <button class="filter-btn priority-btn high"   onclick="setPriorityFilter('HIGH',this)">High (26)</button>
+      <button class="filter-btn priority-btn medium" onclick="setPriorityFilter('MEDIUM',this)">Med (11)</button>
+      <button class="filter-btn priority-btn low"    onclick="setPriorityFilter('LOW',this)">Low (7)</button>
+    </div>
+    <div class="toolbar-divider"></div>
+    <div class="filter-bar">
+      <span class="filter-label">Env:</span>
+      <button class="filter-btn env-btn active"   onclick="setEnvFilter('ALL',this)">All</button>
+      <button class="filter-btn env-btn env-prod" onclick="setEnvFilter('prod',this)">Prod</button>
+      <button class="filter-btn env-btn env-tst"  onclick="setEnvFilter('tst',this)">Tst</button>
+      <button class="filter-btn env-btn env-dev"  onclick="setEnvFilter('dev',this)">Dev</button>
+    </div>
+    <button class="csv-btn" onclick="exportCSV()">⬇ Export CSV</button>
+  </div>
+
+  <div class="table-wrapper">
+    <table id="findings-table">
+          <thead><tr>
+            <th>Priority</th><th>Service</th><th>Resource</th><th>Type</th><th>Details</th><th>Est. Savings/mo</th><th></th>
+          </tr></thead>
+          <tbody>
+      <tr class="finding-row" id="frow-0" onclick="toggleDetail(0)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="eventslambdastack-onnotificationreceivedoptimizedl-q5aoznv52f2s"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">EventsLambdaStack-OnNotificationReceivedOptimizedL-Q5aOznv52f2s</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">No invocations in the last 14 days — last modified 3 days ago — triggering EventBridge rule &quot;EventsLambdaStack-OnNotificationReceivedOptimizedRu-S638AuqADkcj&quot; also silent</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-0">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-0">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">5120 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">3 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Review whether this function is still needed. If it belongs to a decommissioned feature, delete it and its associated log group to reduce clutter.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:EventsLambdaStack-OnNotificationReceivedOptimizedL-Q5aOznv52f2s</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-1" onclick="toggleDetail(1)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="io-credential-s3-prd-custom-resource-existing-s3"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">io-credential-s3-prd-custom-resource-existing-s3</span></td>
+        <td><span class="badge badge-type badge-type-DEPRECATED_RUNTIME">DEPRECATED RUNTIME</span></td>
+        <td class="details-cell">Runtime nodejs16.x is EOL — Node.js 16 no longer receives security patches</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-1">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-1">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1024 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">698 days ago</span></div><div class="metric-row"><span class="metric-label">Runtime</span><span class="metric-value">nodejs16.x</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Upgrade runtime from nodejs16.x to nodejs22.x. Update your CDK stack or serverless.yml and redeploy.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-credential-s3-prd-custom-resource-existing-s3</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-2" onclick="toggleDetail(2)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="io-credential-s3-prd-custom-resource-existing-s3"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">io-credential-s3-prd-custom-resource-existing-s3</span></td>
+        <td><span class="badge badge-type badge-type-ABANDONED">ABANDONED</span></td>
+        <td class="details-cell">No invocations in 14 days — last deployed 698 days ago. Likely abandoned dead code.</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-2">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-2">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1024 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">698 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Delete this function and its log group (/aws/lambda/io-credential-s3-prd-custom-resource-existing-s3). It has had no invocations and no code changes in over 698 days — retaining it adds cost and maintenance surface.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-credential-s3-prd-custom-resource-existing-s3</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-3" onclick="toggleDetail(3)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="aws-controltower-notificationforwarder"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">aws-controltower-NotificationForwarder</span></td>
+        <td><span class="badge badge-type badge-type-ABANDONED">ABANDONED</span></td>
+        <td class="details-cell">No invocations in 14 days — last deployed 192 days ago. Likely abandoned dead code.</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-3">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-3">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">128 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">192 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Delete this function and its log group (/aws/lambda/aws-controltower-NotificationForwarder). It has had no invocations and no code changes in over 192 days — retaining it adds cost and maintenance surface.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:aws-controltower-NotificationForwarder</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-4" onclick="toggleDetail(4)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="io-dtdl-prd-graphauthorizer"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">io-dtdl-prd-graphAuthorizer</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">No invocations in the last 14 days — last modified 3 days ago</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-4">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-4">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1536 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">3 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Review whether this function is still needed. If it belongs to a decommissioned feature, delete it and its associated log group to reduce clutter.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-dtdl-prd-graphAuthorizer</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-5" onclick="toggleDetail(5)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="datamigrationstack-continuedatamigrationlambdaioda-ogobjzubhthu"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">DataMigrationStack-ContinueDataMigrationLambdaioda-ogoBJZUBHtHU</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">No invocations in the last 14 days — last modified 3 days ago — triggering EventBridge rule &quot;DataMigrationStack-ContinueDataMigrationRuleBA9060A-2uMq3TTooZ4n&quot; also silent</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-5">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-5">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">5120 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">3 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Review whether this function is still needed. If it belongs to a decommissioned feature, delete it and its associated log group to reduce clutter.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:DataMigrationStack-ContinueDataMigrationLambdaioda-ogoBJZUBHtHU</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-6" onclick="toggleDetail(6)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="io-dtdl-prd-ingestcomponents"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">io-dtdl-prd-ingestComponents</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">No invocations in the last 14 days — last modified 3 days ago — triggering EventBridge rule &quot;io-dtdl-prd-ingestComponents-rule-1&quot; also silent</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-6">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-6">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1536 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">3 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Review whether this function is still needed. If it belongs to a decommissioned feature, delete it and its associated log group to reduce clutter.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-dtdl-prd-ingestComponents</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-7" onclick="toggleDetail(7)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="io-tenants-prd-setdisplaynameforinstallation"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">io-tenants-prd-setDisplayNameForInstallation</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">No invocations in the last 14 days — last modified 3 days ago</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-7">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-7">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1536 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">3 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Review whether this function is still needed. If it belongs to a decommissioned feature, delete it and its associated log group to reduce clutter.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-tenants-prd-setDisplayNameForInstallation</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-8" onclick="toggleDetail(8)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="io-tenants-prd-setpubkeyforinstallation"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">io-tenants-prd-setPubKeyForInstallation</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">No invocations in the last 14 days — last modified 3 days ago</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-8">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-8">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1536 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">3 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Review whether this function is still needed. If it belongs to a decommissioned feature, delete it and its associated log group to reduce clutter.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-tenants-prd-setPubKeyForInstallation</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-9" onclick="toggleDetail(9)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="io-dtdl-prd-graphql"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">io-dtdl-prd-graphql</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">No invocations in the last 14 days — last modified 3 days ago</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-9">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-9">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1536 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">3 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Review whether this function is still needed. If it belongs to a decommissioned feature, delete it and its associated log group to reduce clutter.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-dtdl-prd-graphql</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-10" onclick="toggleDetail(10)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="io-tenants-prd-batchgetinstallations"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">io-tenants-prd-batchGetInstallations</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">No invocations in the last 14 days — last modified 3 days ago</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-10">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-10">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1536 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">3 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Review whether this function is still needed. If it belongs to a decommissioned feature, delete it and its associated log group to reduce clutter.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-tenants-prd-batchGetInstallations</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-11" onclick="toggleDetail(11)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="io-webhooks-prd-reportdeliveryfailure"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">io-webhooks-prd-reportDeliveryFailure</span></td>
+        <td><span class="badge badge-type badge-type-DEPRECATED_RUNTIME">DEPRECATED RUNTIME</span></td>
+        <td class="details-cell">Runtime nodejs16.x is EOL — Node.js 16 no longer receives security patches</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-11">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-11">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1536 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">698 days ago</span></div><div class="metric-row"><span class="metric-label">Runtime</span><span class="metric-value">nodejs16.x</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Upgrade runtime from nodejs16.x to nodejs22.x. Update your CDK stack or serverless.yml and redeploy.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-webhooks-prd-reportDeliveryFailure</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-12" onclick="toggleDetail(12)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="io-webhooks-prd-reportdeliveryfailure"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">io-webhooks-prd-reportDeliveryFailure</span></td>
+        <td><span class="badge badge-type badge-type-ABANDONED">ABANDONED</span></td>
+        <td class="details-cell">No invocations in 14 days — last deployed 698 days ago. Likely abandoned dead code.</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-12">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-12">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1536 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">698 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Delete this function and its log group (/aws/lambda/io-webhooks-prd-reportDeliveryFailure). It has had no invocations and no code changes in over 698 days — retaining it adds cost and maintenance surface.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-webhooks-prd-reportDeliveryFailure</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-13" onclick="toggleDetail(13)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="io-tenants-prd-getinstallationcustomization"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">io-tenants-prd-getInstallationCustomization</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">No invocations in the last 14 days — last modified 3 days ago</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-13">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-13">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1536 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">3 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Review whether this function is still needed. If it belongs to a decommissioned feature, delete it and its associated log group to reduce clutter.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-tenants-prd-getInstallationCustomization</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-14" onclick="toggleDetail(14)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="usergraphapilambdastack-appclientcreatedlambdacons-wvse6gi5v1xk"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">UserGraphApiLambdaStack-AppClientCreatedLambdaCons-wvSE6GI5V1xk</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">No invocations in the last 14 days — last modified 3 days ago — triggering EventBridge rule &quot;UserGraphApiLambdaStack-AppClientCreatedRule4A180FF-Vkw58msVxWzQ&quot; also silent</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-14">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-14">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">256 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">3 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Review whether this function is still needed. If it belongs to a decommissioned feature, delete it and its associated log group to reduce clutter.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:UserGraphApiLambdaStack-AppClientCreatedLambdaCons-wvSE6GI5V1xk</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-15" onclick="toggleDetail(15)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="io-credential-s3-prd-processuploadedfile"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">io-credential-s3-prd-processUploadedFile</span></td>
+        <td><span class="badge badge-type badge-type-DEPRECATED_RUNTIME">DEPRECATED RUNTIME</span></td>
+        <td class="details-cell">Runtime nodejs16.x is EOL — Node.js 16 no longer receives security patches</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-15">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-15">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1024 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">698 days ago</span></div><div class="metric-row"><span class="metric-label">Runtime</span><span class="metric-value">nodejs16.x</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Upgrade runtime from nodejs16.x to nodejs22.x. Update your CDK stack or serverless.yml and redeploy.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-credential-s3-prd-processUploadedFile</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-16" onclick="toggleDetail(16)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="io-credential-s3-prd-processuploadedfile"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">io-credential-s3-prd-processUploadedFile</span></td>
+        <td><span class="badge badge-type badge-type-ABANDONED">ABANDONED</span></td>
+        <td class="details-cell">No invocations in 14 days — last deployed 698 days ago. Likely abandoned dead code.</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-16">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-16">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1024 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">698 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Delete this function and its log group (/aws/lambda/io-credential-s3-prd-processUploadedFile). It has had no invocations and no code changes in over 698 days — retaining it adds cost and maintenance surface.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-credential-s3-prd-processUploadedFile</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-17" onclick="toggleDetail(17)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="io-tenants-prd-batchgetinstallationlookups"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">io-tenants-prd-batchGetInstallationLookups</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">No invocations in the last 14 days — last modified 3 days ago</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-17">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-17">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1536 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">3 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Review whether this function is still needed. If it belongs to a decommissioned feature, delete it and its associated log group to reduce clutter.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-tenants-prd-batchGetInstallationLookups</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-18" onclick="toggleDetail(18)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="s3bucketsstack-bucketnotificationshandler050a0587b-nfqh701cfe9t"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">S3BucketsStack-BucketNotificationsHandler050a0587b-NfQh701CfE9t</span></td>
+        <td><span class="badge badge-type badge-type-ABANDONED">ABANDONED</span></td>
+        <td class="details-cell">No invocations in 14 days — last deployed 137 days ago. Likely abandoned dead code.</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-18">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-18">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">128 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">137 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Delete this function and its log group (/aws/lambda/S3BucketsStack-BucketNotificationsHandler050a0587b-NfQh701CfE9t). It has had no invocations and no code changes in over 137 days — retaining it adds cost and maintenance surface.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:S3BucketsStack-BucketNotificationsHandler050a0587b-NfQh701CfE9t</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-19" onclick="toggleDetail(19)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="io-tenants-prd-getallinstallations"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">io-tenants-prd-getAllInstallations</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">No invocations in the last 14 days — last modified 3 days ago</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-19">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-19">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1536 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">3 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Review whether this function is still needed. If it belongs to a decommissioned feature, delete it and its associated log group to reduce clutter.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-tenants-prd-getAllInstallations</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-20" onclick="toggleDetail(20)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="io-tenants-prd-setissuerforinstallation"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">io-tenants-prd-setIssuerForInstallation</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">No invocations in the last 14 days — last modified 3 days ago</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-20">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-20">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1536 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">3 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Review whether this function is still needed. If it belongs to a decommissioned feature, delete it and its associated log group to reduce clutter.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-tenants-prd-setIssuerForInstallation</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-21" onclick="toggleDetail(21)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="io-tenants-prd-archiveinstallation"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">io-tenants-prd-archiveInstallation</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">No invocations in the last 14 days — last modified 3 days ago</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-21">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-21">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1536 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">3 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Review whether this function is still needed. If it belongs to a decommissioned feature, delete it and its associated log group to reduce clutter.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-tenants-prd-archiveInstallation</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-22" onclick="toggleDetail(22)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="datamigrationstack-initiatedatamigrationlambdaioda-ogrsuvmhfbn2"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">DataMigrationStack-InitiateDataMigrationLambdaioda-oGRsUvMHfBn2</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">No invocations in the last 14 days — last modified 3 days ago — triggering EventBridge rule &quot;DataMigrationStack-InitiateDataMigrationRule854B277-VgdFfQNhKftg&quot; also silent</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-22">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-22">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">5120 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">3 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Review whether this function is still needed. If it belongs to a decommissioned feature, delete it and its associated log group to reduce clutter.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:DataMigrationStack-InitiateDataMigrationLambdaioda-oGRsUvMHfBn2</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-23" onclick="toggleDetail(23)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="io-tenants-prd-status"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">io-tenants-prd-status</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">No invocations in the last 14 days — last modified 3 days ago</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-23">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-23">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1536 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">3 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Review whether this function is still needed. If it belongs to a decommissioned feature, delete it and its associated log group to reduce clutter.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-tenants-prd-status</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-24" onclick="toggleDetail(24)"
+          data-priority="HIGH"
+          data-service="Lambda"
+          data-name="datamigrationstack-completeddatamigrationlambdaiod-eqfwkf1rmu0x"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">DataMigrationStack-CompletedDataMigrationLambdaiod-eqfwKf1RmU0X</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">No invocations in the last 14 days — last modified 3 days ago — triggering EventBridge rule &quot;DataMigrationStack-CompletedDataMigrationRuleDD6050-9Lnhos8GBgka&quot; also silent</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-24">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-24">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">0 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">5120 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">3 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Review whether this function is still needed. If it belongs to a decommissioned feature, delete it and its associated log group to reduce clutter.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:DataMigrationStack-CompletedDataMigrationLambdaiod-eqfwKf1RmU0X</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-25" onclick="toggleDetail(25)"
+          data-priority="HIGH"
+          data-service="Provisioned Concurrency"
+          data-name="io-dtdl-prd-graphql"
+          data-env="unknown"
+          data-team="">
+        <td><span class="badge badge-HIGH">HIGH</span></td>
+        <td><span class="service-icon-sm" style="background:#f59e0b">PC</span>Provisioned Concurrency</td>
+        <td><span class="resource-name">io-dtdl-prd-graphql</span></td>
+        <td><span class="badge badge-type badge-type-PC_IDLE">PC IDLE</span></td>
+        <td class="details-cell">1 units provisioned — zero concurrent executions in last 14 days. Burning $18.06/month with no traffic.</td>
+        <td class="savings-cell"><span class="savings-badge">~$18.06/mo</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-25">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-25">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">provisionedUnits</span><span class="metric-value">1</span></div><div class="metric-row"><span class="metric-label">actualPeakConcurrency</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1536 MB</span></div><div class="metric-row"><span class="metric-label">recommendedUnits</span><span class="metric-value">1</span></div><div class="metric-row"><span class="metric-label">monthlyCostUsd</span><span class="metric-value">18.06</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Remove provisioned concurrency entirely. Re-enable only if traffic resumes. Cold starts will add ~100–500 ms latency but there is no point paying for warm capacity that is never used.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-dtdl-prd-graphql</div>
+              
+      <div class="alarm-section">
+        <h4>Suggested Alarm</h4>
+        <pre class="alarm-command" id="alarm-cmd-25">aws cloudwatch put-metric-alarm \
+  --alarm-name &quot;cloudlens-pc-idle-io-dtdl-prd-graphql&quot; \
+  --namespace AWS/Lambda --metric-name ProvisionedConcurrencyUtilization \
+  --dimensions Name=FunctionName,Value=&quot;io-dtdl-prd-graphql&quot; \
+  --statistic Average --period 86400 \
+  --threshold 10 --comparison-operator LessThanThreshold \
+  --evaluation-periods 3</pre>
+        <button class="copy-btn" onclick="copyAlarm(25, event)">Copy</button>
+      </div>
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-26" onclick="toggleDetail(26)"
+          data-priority="MEDIUM"
+          data-service="EventBridge"
+          data-name="awscontroltowermanagedrule"
+          data-env="unknown"
+          data-team="">
+        <td><span class="badge badge-MEDIUM">MEDIUM</span></td>
+        <td><span class="service-icon-sm" style="background:#E7157B">EB</span>EventBridge</td>
+        <td><span class="resource-name">AWSControlTowerManagedRule</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">Rule is ENABLED but had zero invocations in the last 14 days</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-26">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-26">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Rule Type</span><span class="metric-value">Event Pattern</span></div><div class="metric-row"><span class="metric-label">Schedule</span><span class="metric-value">{  "source": ["aws.securityhub"],   "detail-type": ["Security Hub Findings - Imported"],  "detail": {    "findings": {      "Compliance": {        "AssociatedStandards": {          "StandardsId" : [            { "prefix": "standards/service-managed-aws-control-tower" }          ]        }      },      "Region" : ["us-east-1"]    }  }}</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Verify whether this rule's event pattern or schedule is still receiving events. If it's no longer needed, disable or delete it to avoid confusion.</div>
+              <div class="resource-arn">arn:aws:events:us-east-1:078715503436:rule/AWSControlTowerManagedRule</div>
+              
+      <div class="alarm-section">
+        <h4>Suggested Alarm</h4>
+        <pre class="alarm-command" id="alarm-cmd-26">aws cloudwatch put-metric-alarm \
+  --alarm-name &quot;cloudlens-eb-silent-AWSControlTowerManagedRule&quot; \
+  --namespace AWS/Events --metric-name MatchedEvents \
+  --dimensions Name=RuleName,Value=&quot;AWSControlTowerManagedRule&quot; \
+  --statistic Sum --period 86400 \
+  --threshold 1 --comparison-operator LessThanThreshold \
+  --evaluation-periods 1 --treat-missing-data breaching</pre>
+        <button class="copy-btn" onclick="copyAlarm(26, event)">Copy</button>
+      </div>
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-27" onclick="toggleDetail(27)"
+          data-priority="MEDIUM"
+          data-service="EventBridge"
+          data-name="datamigrationstack-completeddatamigrationruledd6050-9lnhos8gbgka"
+          data-env="unknown"
+          data-team="">
+        <td><span class="badge badge-MEDIUM">MEDIUM</span></td>
+        <td><span class="service-icon-sm" style="background:#E7157B">EB</span>EventBridge</td>
+        <td><span class="resource-name">DataMigrationStack-CompletedDataMigrationRuleDD6050-9Lnhos8GBgka</span></td>
+        <td><span class="badge badge-type badge-type-PIPELINE_SILENT">PIPELINE SILENT</span></td>
+        <td class="details-cell">Rule is ENABLED but had zero invocations in the last 14 days — target Lambda &quot;DataMigrationStack-CompletedDataMigrationLambdaiod-eqfwKf1RmU0X&quot; also has no invocations</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-27">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-27">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Rule Type</span><span class="metric-value">Event Pattern</span></div><div class="metric-row"><span class="metric-label">Schedule</span><span class="metric-value">{"detail-type":["data-migration Completed Migration"],"source":["yonomi.co/interop/prd"]}</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Verify whether this rule's event pattern or schedule is still receiving events. If it's no longer needed, disable or delete it to avoid confusion.</div>
+              <div class="resource-arn">arn:aws:events:us-east-1:078715503436:rule/DataMigrationStack-CompletedDataMigrationRuleDD6050-9Lnhos8GBgka</div>
+              
+      <div class="alarm-section">
+        <h4>Suggested Alarm</h4>
+        <pre class="alarm-command" id="alarm-cmd-27">aws cloudwatch put-metric-alarm \
+  --alarm-name &quot;cloudlens-eb-silent-DataMigrationStack-CompletedDataMigrationRuleDD605&quot; \
+  --namespace AWS/Events --metric-name MatchedEvents \
+  --dimensions Name=RuleName,Value=&quot;DataMigrationStack-CompletedDataMigrationRuleDD6050-9Lnhos8GBgka&quot; \
+  --statistic Sum --period 86400 \
+  --threshold 1 --comparison-operator LessThanThreshold \
+  --evaluation-periods 1 --treat-missing-data breaching</pre>
+        <button class="copy-btn" onclick="copyAlarm(27, event)">Copy</button>
+      </div>
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-28" onclick="toggleDetail(28)"
+          data-priority="MEDIUM"
+          data-service="EventBridge"
+          data-name="datamigrationstack-continuedatamigrationruleba9060a-2umq3ttooz4n"
+          data-env="unknown"
+          data-team="">
+        <td><span class="badge badge-MEDIUM">MEDIUM</span></td>
+        <td><span class="service-icon-sm" style="background:#E7157B">EB</span>EventBridge</td>
+        <td><span class="resource-name">DataMigrationStack-ContinueDataMigrationRuleBA9060A-2uMq3TTooZ4n</span></td>
+        <td><span class="badge badge-type badge-type-PIPELINE_SILENT">PIPELINE SILENT</span></td>
+        <td class="details-cell">Rule is ENABLED but had zero invocations in the last 14 days — target Lambda &quot;DataMigrationStack-ContinueDataMigrationLambdaioda-ogoBJZUBHtHU&quot; also has no invocations</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-28">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-28">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Rule Type</span><span class="metric-value">Event Pattern</span></div><div class="metric-row"><span class="metric-label">Schedule</span><span class="metric-value">{"detail-type":["data-migration Continue Migration"],"source":["yonomi.co/interop/prd"]}</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Verify whether this rule's event pattern or schedule is still receiving events. If it's no longer needed, disable or delete it to avoid confusion.</div>
+              <div class="resource-arn">arn:aws:events:us-east-1:078715503436:rule/DataMigrationStack-ContinueDataMigrationRuleBA9060A-2uMq3TTooZ4n</div>
+              
+      <div class="alarm-section">
+        <h4>Suggested Alarm</h4>
+        <pre class="alarm-command" id="alarm-cmd-28">aws cloudwatch put-metric-alarm \
+  --alarm-name &quot;cloudlens-eb-silent-DataMigrationStack-ContinueDataMigrationRuleBA9060&quot; \
+  --namespace AWS/Events --metric-name MatchedEvents \
+  --dimensions Name=RuleName,Value=&quot;DataMigrationStack-ContinueDataMigrationRuleBA9060A-2uMq3TTooZ4n&quot; \
+  --statistic Sum --period 86400 \
+  --threshold 1 --comparison-operator LessThanThreshold \
+  --evaluation-periods 1 --treat-missing-data breaching</pre>
+        <button class="copy-btn" onclick="copyAlarm(28, event)">Copy</button>
+      </div>
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-29" onclick="toggleDetail(29)"
+          data-priority="MEDIUM"
+          data-service="EventBridge"
+          data-name="datamigrationstack-initiatedatamigrationrule854b277-vgdffqnhkftg"
+          data-env="unknown"
+          data-team="">
+        <td><span class="badge badge-MEDIUM">MEDIUM</span></td>
+        <td><span class="service-icon-sm" style="background:#E7157B">EB</span>EventBridge</td>
+        <td><span class="resource-name">DataMigrationStack-InitiateDataMigrationRule854B277-VgdFfQNhKftg</span></td>
+        <td><span class="badge badge-type badge-type-PIPELINE_SILENT">PIPELINE SILENT</span></td>
+        <td class="details-cell">Rule is ENABLED but had zero invocations in the last 14 days — target Lambda &quot;DataMigrationStack-InitiateDataMigrationLambdaioda-oGRsUvMHfBn2&quot; also has no invocations</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-29">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-29">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Rule Type</span><span class="metric-value">Event Pattern</span></div><div class="metric-row"><span class="metric-label">Schedule</span><span class="metric-value">{"detail-type":["data-migration Initiate Migration"],"source":["yonomi.co/interop/prd"]}</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Verify whether this rule's event pattern or schedule is still receiving events. If it's no longer needed, disable or delete it to avoid confusion.</div>
+              <div class="resource-arn">arn:aws:events:us-east-1:078715503436:rule/DataMigrationStack-InitiateDataMigrationRule854B277-VgdFfQNhKftg</div>
+              
+      <div class="alarm-section">
+        <h4>Suggested Alarm</h4>
+        <pre class="alarm-command" id="alarm-cmd-29">aws cloudwatch put-metric-alarm \
+  --alarm-name &quot;cloudlens-eb-silent-DataMigrationStack-InitiateDataMigrationRule854B27&quot; \
+  --namespace AWS/Events --metric-name MatchedEvents \
+  --dimensions Name=RuleName,Value=&quot;DataMigrationStack-InitiateDataMigrationRule854B277-VgdFfQNhKftg&quot; \
+  --statistic Sum --period 86400 \
+  --threshold 1 --comparison-operator LessThanThreshold \
+  --evaluation-periods 1 --treat-missing-data breaching</pre>
+        <button class="copy-btn" onclick="copyAlarm(29, event)">Copy</button>
+      </div>
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-30" onclick="toggleDetail(30)"
+          data-priority="MEDIUM"
+          data-service="EventBridge"
+          data-name="eventslambdastack-onnotificationreceivedoptimizedru-s638auqadkcj"
+          data-env="unknown"
+          data-team="">
+        <td><span class="badge badge-MEDIUM">MEDIUM</span></td>
+        <td><span class="service-icon-sm" style="background:#E7157B">EB</span>EventBridge</td>
+        <td><span class="resource-name">EventsLambdaStack-OnNotificationReceivedOptimizedRu-S638AuqADkcj</span></td>
+        <td><span class="badge badge-type badge-type-PIPELINE_SILENT">PIPELINE SILENT</span></td>
+        <td class="details-cell">Rule is ENABLED but had zero invocations in the last 14 days — target Lambda &quot;EventsLambdaStack-OnNotificationReceivedOptimizedL-Q5aOznv52f2s&quot; also has no invocations</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-30">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-30">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Rule Type</span><span class="metric-value">Event Pattern</span></div><div class="metric-row"><span class="metric-label">Schedule</span><span class="metric-value">{"detail-type":["ingestion Device Notification Received V3"],"source":["yonomi.co/interop/prd"]}</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Verify whether this rule's event pattern or schedule is still receiving events. If it's no longer needed, disable or delete it to avoid confusion.</div>
+              <div class="resource-arn">arn:aws:events:us-east-1:078715503436:rule/EventsLambdaStack-OnNotificationReceivedOptimizedRu-S638AuqADkcj</div>
+              
+      <div class="alarm-section">
+        <h4>Suggested Alarm</h4>
+        <pre class="alarm-command" id="alarm-cmd-30">aws cloudwatch put-metric-alarm \
+  --alarm-name &quot;cloudlens-eb-silent-EventsLambdaStack-OnNotificationReceivedOptimizedR&quot; \
+  --namespace AWS/Events --metric-name MatchedEvents \
+  --dimensions Name=RuleName,Value=&quot;EventsLambdaStack-OnNotificationReceivedOptimizedRu-S638AuqADkcj&quot; \
+  --statistic Sum --period 86400 \
+  --threshold 1 --comparison-operator LessThanThreshold \
+  --evaluation-periods 1 --treat-missing-data breaching</pre>
+        <button class="copy-btn" onclick="copyAlarm(30, event)">Copy</button>
+      </div>
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-31" onclick="toggleDetail(31)"
+          data-priority="MEDIUM"
+          data-service="EventBridge"
+          data-name="ssmexplorermanagedrule"
+          data-env="unknown"
+          data-team="">
+        <td><span class="badge badge-MEDIUM">MEDIUM</span></td>
+        <td><span class="service-icon-sm" style="background:#E7157B">EB</span>EventBridge</td>
+        <td><span class="resource-name">SSMExplorerManagedRule</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">Rule is ENABLED but had zero invocations in the last 14 days</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-31">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-31">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Rule Type</span><span class="metric-value">Event Pattern</span></div><div class="metric-row"><span class="metric-label">Schedule</span><span class="metric-value">{"source":["aws.securityhub"],"detail-type":["Security Hub Insight Results","Security Hub Findings","Security Hub Findings - Imported","Security Hub Findings - Custom Action"]}</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Verify whether this rule's event pattern or schedule is still receiving events. If it's no longer needed, disable or delete it to avoid confusion.</div>
+              <div class="resource-arn">arn:aws:events:us-east-1:078715503436:rule/SSMExplorerManagedRule</div>
+              
+      <div class="alarm-section">
+        <h4>Suggested Alarm</h4>
+        <pre class="alarm-command" id="alarm-cmd-31">aws cloudwatch put-metric-alarm \
+  --alarm-name &quot;cloudlens-eb-silent-SSMExplorerManagedRule&quot; \
+  --namespace AWS/Events --metric-name MatchedEvents \
+  --dimensions Name=RuleName,Value=&quot;SSMExplorerManagedRule&quot; \
+  --statistic Sum --period 86400 \
+  --threshold 1 --comparison-operator LessThanThreshold \
+  --evaluation-periods 1 --treat-missing-data breaching</pre>
+        <button class="copy-btn" onclick="copyAlarm(31, event)">Copy</button>
+      </div>
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-32" onclick="toggleDetail(32)"
+          data-priority="MEDIUM"
+          data-service="EventBridge"
+          data-name="usergraphapilambdastack-appclientcreatedrule4a180ff-vkw58msvxwzq"
+          data-env="unknown"
+          data-team="">
+        <td><span class="badge badge-MEDIUM">MEDIUM</span></td>
+        <td><span class="service-icon-sm" style="background:#E7157B">EB</span>EventBridge</td>
+        <td><span class="resource-name">UserGraphApiLambdaStack-AppClientCreatedRule4A180FF-Vkw58msVxWzQ</span></td>
+        <td><span class="badge badge-type badge-type-PIPELINE_SILENT">PIPELINE SILENT</span></td>
+        <td class="details-cell">Rule is ENABLED but had zero invocations in the last 14 days — target Lambda &quot;UserGraphApiLambdaStack-AppClientCreatedLambdaCons-wvSE6GI5V1xk&quot; also has no invocations</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-32">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-32">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Rule Type</span><span class="metric-value">Event Pattern</span></div><div class="metric-row"><span class="metric-label">Schedule</span><span class="metric-value">{"detail-type":["graph-api-developer-v2 M2MClient Created","graph-api-developer-v2 UserCred Created"],"source":["platform-services/prd"]}</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Verify whether this rule's event pattern or schedule is still receiving events. If it's no longer needed, disable or delete it to avoid confusion.</div>
+              <div class="resource-arn">arn:aws:events:us-east-1:078715503436:rule/UserGraphApiLambdaStack-AppClientCreatedRule4A180FF-Vkw58msVxWzQ</div>
+              
+      <div class="alarm-section">
+        <h4>Suggested Alarm</h4>
+        <pre class="alarm-command" id="alarm-cmd-32">aws cloudwatch put-metric-alarm \
+  --alarm-name &quot;cloudlens-eb-silent-UserGraphApiLambdaStack-AppClientCreatedRule4A180F&quot; \
+  --namespace AWS/Events --metric-name MatchedEvents \
+  --dimensions Name=RuleName,Value=&quot;UserGraphApiLambdaStack-AppClientCreatedRule4A180FF-Vkw58msVxWzQ&quot; \
+  --statistic Sum --period 86400 \
+  --threshold 1 --comparison-operator LessThanThreshold \
+  --evaluation-periods 1 --treat-missing-data breaching</pre>
+        <button class="copy-btn" onclick="copyAlarm(32, event)">Copy</button>
+      </div>
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-33" onclick="toggleDetail(33)"
+          data-priority="MEDIUM"
+          data-service="EventBridge"
+          data-name="aws-controltower-configcompliancechangeeventrule"
+          data-env="unknown"
+          data-team="">
+        <td><span class="badge badge-MEDIUM">MEDIUM</span></td>
+        <td><span class="service-icon-sm" style="background:#E7157B">EB</span>EventBridge</td>
+        <td><span class="resource-name">aws-controltower-ConfigComplianceChangeEventRule</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">Rule is ENABLED but had zero invocations in the last 14 days</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-33">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-33">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Rule Type</span><span class="metric-value">Event Pattern</span></div><div class="metric-row"><span class="metric-label">Schedule</span><span class="metric-value">{"detail-type":["Config Rules Compliance Change"],"source":["aws.config"]}</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Verify whether this rule's event pattern or schedule is still receiving events. If it's no longer needed, disable or delete it to avoid confusion.</div>
+              <div class="resource-arn">arn:aws:events:us-east-1:078715503436:rule/aws-controltower-ConfigComplianceChangeEventRule</div>
+              
+      <div class="alarm-section">
+        <h4>Suggested Alarm</h4>
+        <pre class="alarm-command" id="alarm-cmd-33">aws cloudwatch put-metric-alarm \
+  --alarm-name &quot;cloudlens-eb-silent-aws-controltower-ConfigComplianceChangeEventRule&quot; \
+  --namespace AWS/Events --metric-name MatchedEvents \
+  --dimensions Name=RuleName,Value=&quot;aws-controltower-ConfigComplianceChangeEventRule&quot; \
+  --statistic Sum --period 86400 \
+  --threshold 1 --comparison-operator LessThanThreshold \
+  --evaluation-periods 1 --treat-missing-data breaching</pre>
+        <button class="copy-btn" onclick="copyAlarm(33, event)">Copy</button>
+      </div>
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-34" onclick="toggleDetail(34)"
+          data-priority="MEDIUM"
+          data-service="EventBridge"
+          data-name="io-dtdl-prd-ingestcomponents-rule-1"
+          data-env="unknown"
+          data-team="">
+        <td><span class="badge badge-MEDIUM">MEDIUM</span></td>
+        <td><span class="service-icon-sm" style="background:#E7157B">EB</span>EventBridge</td>
+        <td><span class="resource-name">io-dtdl-prd-ingestComponents-rule-1</span></td>
+        <td><span class="badge badge-type badge-type-PIPELINE_SILENT">PIPELINE SILENT</span></td>
+        <td class="details-cell">Rule is ENABLED but had zero invocations in the last 14 days — target Lambda &quot;io-dtdl-prd-ingestComponents&quot; also has no invocations</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-34">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-34">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Rule Type</span><span class="metric-value">Event Pattern</span></div><div class="metric-row"><span class="metric-label">Schedule</span><span class="metric-value">{"detail-type":["Object Created"],"source":["aws.s3"],"detail":{"bucket":{"name":["io-dtdl-bucket-078715503436"]}}}</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Verify whether this rule's event pattern or schedule is still receiving events. If it's no longer needed, disable or delete it to avoid confusion.</div>
+              <div class="resource-arn">arn:aws:events:us-east-1:078715503436:rule/io-dtdl-prd-ingestComponents-rule-1</div>
+              
+      <div class="alarm-section">
+        <h4>Suggested Alarm</h4>
+        <pre class="alarm-command" id="alarm-cmd-34">aws cloudwatch put-metric-alarm \
+  --alarm-name &quot;cloudlens-eb-silent-io-dtdl-prd-ingestComponents-rule-1&quot; \
+  --namespace AWS/Events --metric-name MatchedEvents \
+  --dimensions Name=RuleName,Value=&quot;io-dtdl-prd-ingestComponents-rule-1&quot; \
+  --statistic Sum --period 86400 \
+  --threshold 1 --comparison-operator LessThanThreshold \
+  --evaluation-periods 1 --treat-missing-data breaching</pre>
+        <button class="copy-btn" onclick="copyAlarm(34, event)">Copy</button>
+      </div>
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-35" onclick="toggleDetail(35)"
+          data-priority="MEDIUM"
+          data-service="Lambda"
+          data-name="io-dtdl-prd-ontraitschemaupdate"
+          data-env="production"
+          data-team="Owner: James.Milani@allegion.com">
+        <td><span class="badge badge-MEDIUM">MEDIUM</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-production">production</span><span class="team-badge">Owner: James.Milani</span><span class="resource-name">io-dtdl-prd-onTraitSchemaUpdate</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">Only 2 invocations in the last 14 days</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-35">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-35">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">2</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">1832 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1536 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">3 days ago</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Review whether this function is still needed. If it belongs to a decommissioned feature, delete it and its associated log group to reduce clutter.</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-dtdl-prd-onTraitSchemaUpdate</div>
+              
+      <div class="alarm-section">
+        <h4>Suggested Alarm</h4>
+        <pre class="alarm-command" id="alarm-cmd-35">aws cloudwatch put-metric-alarm \
+  --alarm-name &quot;cloudlens-idle-io-dtdl-prd-onTraitSchemaUpdate&quot; \
+  --namespace AWS/Lambda --metric-name Invocations \
+  --dimensions Name=FunctionName,Value=&quot;io-dtdl-prd-onTraitSchemaUpdate&quot; \
+  --statistic Sum --period 86400 \
+  --threshold 1 --comparison-operator LessThanThreshold \
+  --evaluation-periods 3 --treat-missing-data notBreaching</pre>
+        <button class="copy-btn" onclick="copyAlarm(35, event)">Copy</button>
+      </div>
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-36" onclick="toggleDetail(36)"
+          data-priority="MEDIUM"
+          data-service="NAT Gateway"
+          data-name="elasticresourcesstack/elasticagentvpc/public-subnet-1subnet1"
+          data-env="unknown"
+          data-team="">
+        <td><span class="badge badge-MEDIUM">MEDIUM</span></td>
+        <td><span class="service-icon-sm" style="background:#64748b">NAT</span>NAT Gateway</td>
+        <td><span class="resource-name">ElasticResourcesStack/ElasticAgentVPC/public-subnet-1Subnet1</span></td>
+        <td><span class="badge badge-type badge-type-NAT_LOW_UTILISATION">NAT LOW UTILISATION</span></td>
+        <td class="details-cell">Avg 0.45 GB/day — low throughput for a $32.40/month fixed-cost gateway.</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-36">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-36">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">totalDataTransferGB</span><span class="metric-value">6.264</span></div><div class="metric-row"><span class="metric-label">avgDailyGB</span><span class="metric-value">0.447</span></div><div class="metric-row"><span class="metric-label">fixedMonthlyCostUsd</span><span class="metric-value">32.4</span></div><div class="metric-row"><span class="metric-label">totalMonthlyCostUsd</span><span class="metric-value">32.68</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Add VPC Endpoints for S3, DynamoDB, ECR, and Secrets Manager to eliminate the majority of data transfer through NAT. Check if multiple NAT Gateways can be consolidated into one.</div>
+              <div class="resource-arn">nat-066fe984746f5a257</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-37" onclick="toggleDetail(37)"
+          data-priority="LOW"
+          data-service="CloudFront"
+          data-name="api.yonomi.io"
+          data-env="unknown"
+          data-team="">
+        <td><span class="badge badge-LOW">LOW</span></td>
+        <td><span class="service-icon-sm" style="background:#0ea5e9">CF</span>CloudFront</td>
+        <td><span class="resource-name">api.yonomi.io</span></td>
+        <td><span class="badge badge-type badge-type-CF_ACTIVE">CF ACTIVE</span></td>
+        <td class="details-cell">106,101 requests + 0.03 GB in 14 days — est. $0.23/month</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-37">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-37">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">totalRequests</span><span class="metric-value">106,101</span></div><div class="metric-row"><span class="metric-label">avgDailyRequests</span><span class="metric-value">7,579</span></div><div class="metric-row"><span class="metric-label">totalDataGB</span><span class="metric-value">0.028</span></div><div class="metric-row"><span class="metric-label">avgDailyGB</span><span class="metric-value">0.002</span></div><div class="metric-row"><span class="metric-label">estimatedMonthlyCostUsd</span><span class="metric-value">0.23</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Review cache hit ratio in CloudFront logs. A low hit rate means most requests reach the origin, increasing API Gateway + Lambda costs. Enable caching where possible to reduce spend.</div>
+              <div class="resource-arn">EG34F37CRAQNW</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-38" onclick="toggleDetail(38)"
+          data-priority="LOW"
+          data-service="Lambda"
+          data-name="io-secrets-management-prd-rotatetoken"
+          data-env="prod"
+          data-team="">
+        <td><span class="badge badge-LOW">LOW</span></td>
+        <td><span class="service-icon-sm" style="background:#FF9900">λ</span>Lambda</td>
+        <td><span class="env-badge env-prod">prod</span><span class="resource-name">io-secrets-management-prd-rotateToken</span></td>
+        <td><span class="badge badge-type badge-type-MISSING_TAGS">MISSING TAGS</span></td>
+        <td class="details-cell">Missing recommended tags: Environment, Team</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-38">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-38">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Invocations</span><span class="metric-value">84</span></div><div class="metric-row"><span class="metric-label">Avg Duration</span><span class="metric-value">2473 ms</span></div><div class="metric-row"><span class="metric-label">Errors</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Throttles</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Configured Memory</span><span class="metric-value">1024 MB</span></div><div class="metric-row"><span class="metric-label">Last Modified</span><span class="metric-value">3 days ago</span></div><div class="metric-row"><span class="metric-label">Avg Memory Used</span><span class="metric-value">273059524 MB</span></div><div class="metric-row"><span class="metric-label">Peak Memory Used</span><span class="metric-value">286000000 MB</span></div><div class="metric-row"><span class="metric-label">Memory Utilisation</span><span class="metric-value">26665969%</span></div><div class="metric-row"><span class="metric-label">Avg Cold Start</span><span class="metric-value">1229 ms</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Tag resources to enable cost allocation and ownership routing. In CDK:
+Tags.of(myFunction).add('Environment', 'prod');
+Tags.of(myFunction).add('Team', 'your-team');</div>
+              <div class="resource-arn">arn:aws:lambda:us-east-1:078715503436:function:io-secrets-management-prd-rotateToken</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-39" onclick="toggleDetail(39)"
+          data-priority="LOW"
+          data-service="S3"
+          data-name="io-deploy-bucket-078715503436"
+          data-env="unknown"
+          data-team="">
+        <td><span class="badge badge-LOW">LOW</span></td>
+        <td><span class="service-icon-sm" style="background:#7AA116">S3</span>S3</td>
+        <td><span class="resource-name">io-deploy-bucket-078715503436</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">Bucket contains no objects and has 0 bytes stored</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-39">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-39">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Object Count</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">sizeBytes</span><span class="metric-value">0</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Delete empty buckets to keep your account tidy. Empty buckets incur no storage cost but add operational overhead and IAM surface area.</div>
+              <div class="resource-arn">arn:aws:s3:::io-deploy-bucket-078715503436</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-40" onclick="toggleDetail(40)"
+          data-priority="LOW"
+          data-service="S3"
+          data-name="io-dtdl-bucket-078715503436"
+          data-env="unknown"
+          data-team="">
+        <td><span class="badge badge-LOW">LOW</span></td>
+        <td><span class="service-icon-sm" style="background:#7AA116">S3</span>S3</td>
+        <td><span class="resource-name">io-dtdl-bucket-078715503436</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">Bucket contains no objects and has 0 bytes stored</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-40">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-40">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Object Count</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">sizeBytes</span><span class="metric-value">0</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Delete empty buckets to keep your account tidy. Empty buckets incur no storage cost but add operational overhead and IAM surface area.</div>
+              <div class="resource-arn">arn:aws:s3:::io-dtdl-bucket-078715503436</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-41" onclick="toggleDetail(41)"
+          data-priority="LOW"
+          data-service="S3"
+          data-name="io-s3-debugger-078715503436"
+          data-env="unknown"
+          data-team="">
+        <td><span class="badge badge-LOW">LOW</span></td>
+        <td><span class="service-icon-sm" style="background:#7AA116">S3</span>S3</td>
+        <td><span class="resource-name">io-s3-debugger-078715503436</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">Bucket contains no objects and has 0 bytes stored</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-41">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-41">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Object Count</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">sizeBytes</span><span class="metric-value">0</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Delete empty buckets to keep your account tidy. Empty buckets incur no storage cost but add operational overhead and IAM surface area.</div>
+              <div class="resource-arn">arn:aws:s3:::io-s3-debugger-078715503436</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-42" onclick="toggleDetail(42)"
+          data-priority="LOW"
+          data-service="SQS"
+          data-name="io-cdk-cs-kafka-ingestion-prd-dlq"
+          data-env="unknown"
+          data-team="">
+        <td><span class="badge badge-LOW">LOW</span></td>
+        <td><span class="service-icon-sm" style="background:#9333ea">SQS</span>SQS</td>
+        <td><span class="resource-name">io-cdk-cs-kafka-ingestion-prd-dlq</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">No messages sent or received in the last 14 days</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-42">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-42">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Messages Sent</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Messages Received</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Visible Messages</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Oldest Message Age</span><span class="metric-value">n/a</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Verify whether this queue is still needed. SQS charges per request so idle queues cost very little, but they add operational overhead. Delete if no longer needed.</div>
+              <div class="resource-arn">arn:aws:sqs:us-east-1:078715503436:io-cdk-cs-kafka-ingestion-prd-dlq</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr>
+      <tr class="finding-row" id="frow-43" onclick="toggleDetail(43)"
+          data-priority="LOW"
+          data-service="SQS"
+          data-name="io-cdk-kafka-ingestion-prd-dlq"
+          data-env="unknown"
+          data-team="">
+        <td><span class="badge badge-LOW">LOW</span></td>
+        <td><span class="service-icon-sm" style="background:#9333ea">SQS</span>SQS</td>
+        <td><span class="resource-name">io-cdk-kafka-ingestion-prd-dlq</span></td>
+        <td><span class="badge badge-type badge-type-IDLE">IDLE</span></td>
+        <td class="details-cell">No messages sent or received in the last 14 days</td>
+        <td class="savings-cell"><span class="savings-nil">—</span></td>
+        <td class="chevron-cell"><span class="chevron" id="chev-43">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-43">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last 14 days)</h4>
+              <div class="metric-row"><span class="metric-label">Messages Sent</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Messages Received</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Visible Messages</span><span class="metric-value">0</span></div><div class="metric-row"><span class="metric-label">Oldest Message Age</span><span class="metric-value">n/a</span></div>
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">Verify whether this queue is still needed. SQS charges per request so idle queues cost very little, but they add operational overhead. Delete if no longer needed.</div>
+              <div class="resource-arn">arn:aws:sqs:us-east-1:078715503436:io-cdk-kafka-ingestion-prd-dlq</div>
+              
+            </div>
+          </div>
+        </td>
+      </tr></tbody>
+        </table>
+  </div>
+
+</div>
+
+<footer>CloudLens — read-only, no changes made to any resource &nbsp;·&nbsp; Mon, 21 Sep 2026 11:16:23 GMT</footer>
+
+<script>
+  var allFindings = [{"idx":0,"priority":"HIGH","service":"Lambda","resourceName":"EventsLambdaStack-OnNotificationReceivedOptimizedL-Q5aOznv52f2s","type":"IDLE","details":"No invocations in the last 14 days — last modified 3 days ago — triggering EventBridge rule \"EventsLambdaStack-OnNotificationReceivedOptimizedRu-S638AuqADkcj\" also silent","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":1,"priority":"HIGH","service":"Lambda","resourceName":"io-credential-s3-prd-custom-resource-existing-s3","type":"DEPRECATED_RUNTIME","details":"Runtime nodejs16.x is EOL — Node.js 16 no longer receives security patches","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":2,"priority":"HIGH","service":"Lambda","resourceName":"io-credential-s3-prd-custom-resource-existing-s3","type":"ABANDONED","details":"No invocations in 14 days — last deployed 698 days ago. Likely abandoned dead code.","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":3,"priority":"HIGH","service":"Lambda","resourceName":"aws-controltower-NotificationForwarder","type":"ABANDONED","details":"No invocations in 14 days — last deployed 192 days ago. Likely abandoned dead code.","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":4,"priority":"HIGH","service":"Lambda","resourceName":"io-dtdl-prd-graphAuthorizer","type":"IDLE","details":"No invocations in the last 14 days — last modified 3 days ago","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":5,"priority":"HIGH","service":"Lambda","resourceName":"DataMigrationStack-ContinueDataMigrationLambdaioda-ogoBJZUBHtHU","type":"IDLE","details":"No invocations in the last 14 days — last modified 3 days ago — triggering EventBridge rule \"DataMigrationStack-ContinueDataMigrationRuleBA9060A-2uMq3TTooZ4n\" also silent","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":6,"priority":"HIGH","service":"Lambda","resourceName":"io-dtdl-prd-ingestComponents","type":"IDLE","details":"No invocations in the last 14 days — last modified 3 days ago — triggering EventBridge rule \"io-dtdl-prd-ingestComponents-rule-1\" also silent","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":7,"priority":"HIGH","service":"Lambda","resourceName":"io-tenants-prd-setDisplayNameForInstallation","type":"IDLE","details":"No invocations in the last 14 days — last modified 3 days ago","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":8,"priority":"HIGH","service":"Lambda","resourceName":"io-tenants-prd-setPubKeyForInstallation","type":"IDLE","details":"No invocations in the last 14 days — last modified 3 days ago","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":9,"priority":"HIGH","service":"Lambda","resourceName":"io-dtdl-prd-graphql","type":"IDLE","details":"No invocations in the last 14 days — last modified 3 days ago","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":10,"priority":"HIGH","service":"Lambda","resourceName":"io-tenants-prd-batchGetInstallations","type":"IDLE","details":"No invocations in the last 14 days — last modified 3 days ago","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":11,"priority":"HIGH","service":"Lambda","resourceName":"io-webhooks-prd-reportDeliveryFailure","type":"DEPRECATED_RUNTIME","details":"Runtime nodejs16.x is EOL — Node.js 16 no longer receives security patches","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":12,"priority":"HIGH","service":"Lambda","resourceName":"io-webhooks-prd-reportDeliveryFailure","type":"ABANDONED","details":"No invocations in 14 days — last deployed 698 days ago. Likely abandoned dead code.","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":13,"priority":"HIGH","service":"Lambda","resourceName":"io-tenants-prd-getInstallationCustomization","type":"IDLE","details":"No invocations in the last 14 days — last modified 3 days ago","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":14,"priority":"HIGH","service":"Lambda","resourceName":"UserGraphApiLambdaStack-AppClientCreatedLambdaCons-wvSE6GI5V1xk","type":"IDLE","details":"No invocations in the last 14 days — last modified 3 days ago — triggering EventBridge rule \"UserGraphApiLambdaStack-AppClientCreatedRule4A180FF-Vkw58msVxWzQ\" also silent","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":15,"priority":"HIGH","service":"Lambda","resourceName":"io-credential-s3-prd-processUploadedFile","type":"DEPRECATED_RUNTIME","details":"Runtime nodejs16.x is EOL — Node.js 16 no longer receives security patches","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":16,"priority":"HIGH","service":"Lambda","resourceName":"io-credential-s3-prd-processUploadedFile","type":"ABANDONED","details":"No invocations in 14 days — last deployed 698 days ago. Likely abandoned dead code.","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":17,"priority":"HIGH","service":"Lambda","resourceName":"io-tenants-prd-batchGetInstallationLookups","type":"IDLE","details":"No invocations in the last 14 days — last modified 3 days ago","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":18,"priority":"HIGH","service":"Lambda","resourceName":"S3BucketsStack-BucketNotificationsHandler050a0587b-NfQh701CfE9t","type":"ABANDONED","details":"No invocations in 14 days — last deployed 137 days ago. Likely abandoned dead code.","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":19,"priority":"HIGH","service":"Lambda","resourceName":"io-tenants-prd-getAllInstallations","type":"IDLE","details":"No invocations in the last 14 days — last modified 3 days ago","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":20,"priority":"HIGH","service":"Lambda","resourceName":"io-tenants-prd-setIssuerForInstallation","type":"IDLE","details":"No invocations in the last 14 days — last modified 3 days ago","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":21,"priority":"HIGH","service":"Lambda","resourceName":"io-tenants-prd-archiveInstallation","type":"IDLE","details":"No invocations in the last 14 days — last modified 3 days ago","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":22,"priority":"HIGH","service":"Lambda","resourceName":"DataMigrationStack-InitiateDataMigrationLambdaioda-oGRsUvMHfBn2","type":"IDLE","details":"No invocations in the last 14 days — last modified 3 days ago — triggering EventBridge rule \"DataMigrationStack-InitiateDataMigrationRule854B277-VgdFfQNhKftg\" also silent","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":23,"priority":"HIGH","service":"Lambda","resourceName":"io-tenants-prd-status","type":"IDLE","details":"No invocations in the last 14 days — last modified 3 days ago","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":24,"priority":"HIGH","service":"Lambda","resourceName":"DataMigrationStack-CompletedDataMigrationLambdaiod-eqfwKf1RmU0X","type":"IDLE","details":"No invocations in the last 14 days — last modified 3 days ago — triggering EventBridge rule \"DataMigrationStack-CompletedDataMigrationRuleDD6050-9Lnhos8GBgka\" also silent","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":25,"priority":"HIGH","service":"Provisioned Concurrency","resourceName":"io-dtdl-prd-graphql","type":"PC_IDLE","details":"1 units provisioned — zero concurrent executions in last 14 days. Burning $18.06/month with no traffic.","region":"us-east-1","savings":18.0636,"environment":"unknown","team":""},{"idx":26,"priority":"MEDIUM","service":"EventBridge","resourceName":"AWSControlTowerManagedRule","type":"IDLE","details":"Rule is ENABLED but had zero invocations in the last 14 days","region":"us-east-1","savings":0,"environment":"unknown","team":""},{"idx":27,"priority":"MEDIUM","service":"EventBridge","resourceName":"DataMigrationStack-CompletedDataMigrationRuleDD6050-9Lnhos8GBgka","type":"PIPELINE_SILENT","details":"Rule is ENABLED but had zero invocations in the last 14 days — target Lambda \"DataMigrationStack-CompletedDataMigrationLambdaiod-eqfwKf1RmU0X\" also has no invocations","region":"us-east-1","savings":0,"environment":"unknown","team":""},{"idx":28,"priority":"MEDIUM","service":"EventBridge","resourceName":"DataMigrationStack-ContinueDataMigrationRuleBA9060A-2uMq3TTooZ4n","type":"PIPELINE_SILENT","details":"Rule is ENABLED but had zero invocations in the last 14 days — target Lambda \"DataMigrationStack-ContinueDataMigrationLambdaioda-ogoBJZUBHtHU\" also has no invocations","region":"us-east-1","savings":0,"environment":"unknown","team":""},{"idx":29,"priority":"MEDIUM","service":"EventBridge","resourceName":"DataMigrationStack-InitiateDataMigrationRule854B277-VgdFfQNhKftg","type":"PIPELINE_SILENT","details":"Rule is ENABLED but had zero invocations in the last 14 days — target Lambda \"DataMigrationStack-InitiateDataMigrationLambdaioda-oGRsUvMHfBn2\" also has no invocations","region":"us-east-1","savings":0,"environment":"unknown","team":""},{"idx":30,"priority":"MEDIUM","service":"EventBridge","resourceName":"EventsLambdaStack-OnNotificationReceivedOptimizedRu-S638AuqADkcj","type":"PIPELINE_SILENT","details":"Rule is ENABLED but had zero invocations in the last 14 days — target Lambda \"EventsLambdaStack-OnNotificationReceivedOptimizedL-Q5aOznv52f2s\" also has no invocations","region":"us-east-1","savings":0,"environment":"unknown","team":""},{"idx":31,"priority":"MEDIUM","service":"EventBridge","resourceName":"SSMExplorerManagedRule","type":"IDLE","details":"Rule is ENABLED but had zero invocations in the last 14 days","region":"us-east-1","savings":0,"environment":"unknown","team":""},{"idx":32,"priority":"MEDIUM","service":"EventBridge","resourceName":"UserGraphApiLambdaStack-AppClientCreatedRule4A180FF-Vkw58msVxWzQ","type":"PIPELINE_SILENT","details":"Rule is ENABLED but had zero invocations in the last 14 days — target Lambda \"UserGraphApiLambdaStack-AppClientCreatedLambdaCons-wvSE6GI5V1xk\" also has no invocations","region":"us-east-1","savings":0,"environment":"unknown","team":""},{"idx":33,"priority":"MEDIUM","service":"EventBridge","resourceName":"aws-controltower-ConfigComplianceChangeEventRule","type":"IDLE","details":"Rule is ENABLED but had zero invocations in the last 14 days","region":"us-east-1","savings":0,"environment":"unknown","team":""},{"idx":34,"priority":"MEDIUM","service":"EventBridge","resourceName":"io-dtdl-prd-ingestComponents-rule-1","type":"PIPELINE_SILENT","details":"Rule is ENABLED but had zero invocations in the last 14 days — target Lambda \"io-dtdl-prd-ingestComponents\" also has no invocations","region":"us-east-1","savings":0,"environment":"unknown","team":""},{"idx":35,"priority":"MEDIUM","service":"Lambda","resourceName":"io-dtdl-prd-onTraitSchemaUpdate","type":"IDLE","details":"Only 2 invocations in the last 14 days","region":"us-east-1","savings":0,"environment":"production","team":"Owner: James.Milani@allegion.com"},{"idx":36,"priority":"MEDIUM","service":"NAT Gateway","resourceName":"ElasticResourcesStack/ElasticAgentVPC/public-subnet-1Subnet1","type":"NAT_LOW_UTILISATION","details":"Avg 0.45 GB/day — low throughput for a $32.40/month fixed-cost gateway.","region":"us-east-1","savings":0,"environment":"unknown","team":""},{"idx":37,"priority":"LOW","service":"CloudFront","resourceName":"api.yonomi.io","type":"CF_ACTIVE","details":"106,101 requests + 0.03 GB in 14 days — est. $0.23/month","region":"global","savings":0,"environment":"unknown","team":""},{"idx":38,"priority":"LOW","service":"Lambda","resourceName":"io-secrets-management-prd-rotateToken","type":"MISSING_TAGS","details":"Missing recommended tags: Environment, Team","region":"us-east-1","savings":0,"environment":"prod","team":""},{"idx":39,"priority":"LOW","service":"S3","resourceName":"io-deploy-bucket-078715503436","type":"IDLE","details":"Bucket contains no objects and has 0 bytes stored","region":"global","savings":0,"environment":"unknown","team":""},{"idx":40,"priority":"LOW","service":"S3","resourceName":"io-dtdl-bucket-078715503436","type":"IDLE","details":"Bucket contains no objects and has 0 bytes stored","region":"global","savings":0,"environment":"unknown","team":""},{"idx":41,"priority":"LOW","service":"S3","resourceName":"io-s3-debugger-078715503436","type":"IDLE","details":"Bucket contains no objects and has 0 bytes stored","region":"global","savings":0,"environment":"unknown","team":""},{"idx":42,"priority":"LOW","service":"SQS","resourceName":"io-cdk-cs-kafka-ingestion-prd-dlq","type":"IDLE","details":"No messages sent or received in the last 14 days","region":"us-east-1","savings":0,"environment":"unknown","team":""},{"idx":43,"priority":"LOW","service":"SQS","resourceName":"io-cdk-kafka-ingestion-prd-dlq","type":"IDLE","details":"No messages sent or received in the last 14 days","region":"us-east-1","savings":0,"environment":"unknown","team":""}];
+
+  var activeFilter    = 'ALL';
+  var activeEnvFilter = 'ALL';
+  var activeSearch    = '';
+
+  // ── Doughnut chart ────────────────────────────────────────────────────────
+  (function() {
+    var canvas = document.getElementById('doughnut-chart');
+    if (!canvas || typeof Chart === 'undefined') return;
+    new Chart(canvas, {
+      type: 'doughnut',
+      data: {
+        labels: ["Lambda","Provisioned Concurrency","EventBridge","NAT Gateway","CloudFront","S3","SQS"],
+        datasets: [{ data: [27,1,9,1,1,3,2], backgroundColor: ["#FF9900","#f59e0b","#E7157B","#64748b","#0ea5e9","#7AA116","#9333ea"], borderWidth: 2, borderColor: '#1e293b' }]
+      },
+      options: {
+        plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8', font: { size: 11 }, padding: 8, boxWidth: 12 } } },
+        cutout: '65%',
+      }
+    });
+  })();
+
+  // ── Toggle detail row ─────────────────────────────────────────────────────
+  function toggleDetail(idx) {
+    var row  = document.getElementById('detail-' + idx);
+    var chev = document.getElementById('chev-' + idx);
+    row.style.display = '';
+    var open = row.classList.toggle('open');
+    chev.textContent = open ? '▾' : '▸';
+  }
+
+  // ── Filters ───────────────────────────────────────────────────────────────
+  function applySearch(val) { activeSearch = val.toLowerCase().trim(); renderVisibility(); }
+
+  function setPriorityFilter(filter, btn) {
+    document.querySelectorAll('.priority-btn').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    activeFilter = filter;
+    renderVisibility();
+  }
+
+  function setEnvFilter(env, btn) {
+    document.querySelectorAll('.env-btn').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    activeEnvFilter = env;
+    renderVisibility();
+  }
+
+  function renderVisibility() {
+    allFindings.forEach(function(f) {
+      var frow = document.getElementById('frow-'   + f.idx);
+      var drow = document.getElementById('detail-' + f.idx);
+      var chev = document.getElementById('chev-'   + f.idx);
+      var matchPriority = activeFilter    === 'ALL' || activeFilter    === f.priority;
+      var matchEnv      = activeEnvFilter === 'ALL' || activeEnvFilter === f.environment;
+      var matchSearch   = !activeSearch   || f.resourceName.toLowerCase().includes(activeSearch);
+      var visible = matchPriority && matchEnv && matchSearch;
+      if (frow) frow.classList.toggle('filtered', !visible);
+      if (drow) { drow.classList.toggle('filtered', !visible); drow.classList.remove('open'); }
+      if (chev) chev.textContent = '▸';
+    });
+  }
+
+  // ── Copy alarm command ────────────────────────────────────────────────────
+  function copyAlarm(idx, evt) {
+    evt.stopPropagation();
+    var el  = document.getElementById('alarm-cmd-' + idx);
+    var btn = evt.target;
+    if (!el) return;
+    navigator.clipboard.writeText(el.textContent).then(function() {
+      var orig = btn.textContent;
+      btn.textContent = '✓ Copied';
+      btn.classList.add('copied');
+      setTimeout(function() { btn.textContent = orig; btn.classList.remove('copied'); }, 2000);
+    }).catch(function() {
+      var range = document.createRange();
+      range.selectNode(el);
+      window.getSelection().removeAllRanges();
+      window.getSelection().addRange(range);
+    });
+  }
+
+  // ── CSV export ────────────────────────────────────────────────────────────
+  function exportCSV() {
+    var rows = [['Priority','Service','Resource','Type','Details','Est Savings/mo','Region','Environment','Team']];
+    allFindings.forEach(function(f) {
+      rows.push([
+        f.priority, f.service,
+        '"' + f.resourceName.replace(/"/g,'""') + '"',
+        f.type,
+        '"' + f.details.replace(/"/g,'""') + '"',
+        f.savings > 0 ? '$' + f.savings.toFixed(2) : '',
+        f.region,
+        f.environment,
+        f.team,
+      ]);
+    });
+    var csv  = rows.map(r => r.join(',')).join('\n');
+    var blob = new Blob([csv], { type: 'text/csv' });
+    var url  = URL.createObjectURL(blob);
+    var a    = document.createElement('a');
+    a.href   = url;
+    a.download = 'cloudlens-findings.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+</script>
+</body>
+</html>

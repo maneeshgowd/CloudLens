@@ -1,0 +1,3 @@
+.run-creds.sh
+node_modules/
+.claude/

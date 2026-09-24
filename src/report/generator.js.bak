@@ -1,0 +1,738 @@
+'use strict';
+
+function generateReport({ findings, summary, provider, days }) {
+  const now         = new Date();
+  const highCount   = findings.filter(f => f.priority === 'HIGH').length;
+  const mediumCount = findings.filter(f => f.priority === 'MEDIUM').length;
+  const lowCount    = findings.filter(f => f.priority === 'LOW').length;
+  const scanned     = summary.aws?.resourcesScanned ?? summary.azure?.resourcesScanned ?? 0;
+  const costCtx     = summary.aws?.costContext ?? summary.azure?.costContext ?? null;
+
+  const anomalyCount    = findings.filter(f => f.type === 'ANOMALY_DROP').length;
+  const deprecatedCount = findings.filter(f => f.type === 'DEPRECATED_RUNTIME').length;
+  const missingTagCount = findings.filter(f => f.type === 'MISSING_TAGS').length;
+  const pipelineCount   = findings.filter(f => f.type === 'PIPELINE_SILENT').length;
+  const abandonedCount  = findings.filter(f => f.type === 'ABANDONED').length;
+
+  const byService = {};
+  for (const f of findings) byService[f.service] = (byService[f.service] || 0) + 1;
+
+  const serviceColors = {
+    'Lambda':                  '#FF9900',
+    'Provisioned Concurrency': '#f59e0b',
+    'DynamoDB':                '#4A4A9F',
+    'SNS':                     '#E7157B',
+    'S3':                      '#7AA116',
+    'EventBridge':             '#E7157B',
+    'Log Groups':              '#2563eb',
+    'SQS':                     '#9333ea',
+    'ECS':                     '#06b6d4',
+    'NAT Gateway':             '#64748b',
+    'API Gateway':             '#8b5cf6',
+    'Secrets Manager':         '#ec4899',
+    'CloudFront':              '#0ea5e9',
+    'Azure Functions':         '#0078d4',
+    'Virtual Machines':        '#0078d4',
+    'App Service':             '#0078d4',
+    'Blob Storage':            '#0072c6',
+    'Cosmos DB':               '#0072c6',
+    'Service Bus':             '#0078d4',
+    'Log Analytics':           '#0078d4',
+    'Azure Monitor':           '#0072c6',
+  };
+  const serviceIconLabel = {
+    'Lambda':                  'λ',
+    'Provisioned Concurrency': 'PC',
+    'DynamoDB':                'DB',
+    'SNS':                     'SNS',
+    'S3':                      'S3',
+    'EventBridge':             'EB',
+    'Log Groups':              'CW',
+    'SQS':                     'SQS',
+    'ECS':                     'ECS',
+    'NAT Gateway':             'NAT',
+    'API Gateway':             'API',
+    'Secrets Manager':         'SM',
+    'CloudFront':              'CF',
+    'Azure Functions':         'fn',
+    'Virtual Machines':        'VM',
+    'App Service':             'APP',
+    'Blob Storage':            'BLOB',
+    'Cosmos DB':               'DB',
+    'Service Bus':             'SB',
+    'Log Analytics':           'LA',
+    'Azure Monitor':           'MON',
+  };
+
+  // ── Executive summary ──────────────────────────────────────────────────────
+  const HTYPES      = new Set(['ANOMALY_DROP','HIGH_ERROR_RATE','PIPELINE_SILENT','DLQ_MESSAGES','STALE_MESSAGES']);
+  const healthCount = findings.filter(f => HTYPES.has(f.type)).length;
+  const totalSpend   = costCtx?.totalEstimatedCost ?? 0;
+  const totalSavings = findings.reduce((sum, f) => sum + (f.estimatedMonthlySavings || 0), 0);
+  const annualWaste  = totalSavings * 12;
+
+  const RANK = { ABANDONED:0, ANOMALY_DROP:1, HIGH_ERROR_RATE:2, PIPELINE_SILENT:3, PC_IDLE:4, DLQ_MESSAGES:5, DEPRECATED_RUNTIME:6, PC_OVER_PROVISIONED:7, STALE_MESSAGES:8 };
+  const top3 = findings.filter(f => f.priority === 'HIGH').slice()
+    .sort((a, b) => (RANK[a.type] ?? 99) - (RANK[b.type] ?? 99)).slice(0, 3);
+
+  const top3HTML = top3.map((f, n) => {
+    const icons = ['①', '②', '③'];
+    const sv = f.estimatedMonthlySavings > 0 ? ` · ~$${f.estimatedMonthlySavings.toFixed(2)}/mo` : '';
+    return `<div class="action-card">
+      <div class="action-num">${icons[n]}</div>
+      <div class="action-body">
+        <div class="action-header">
+          <span class="badge badge-HIGH">HIGH</span>
+          <span class="action-service">${escapeHtml(f.service)}</span>
+          <span class="action-resource">${escapeHtml(f.resourceName)}</span>
+        </div>
+        <div class="action-detail">${escapeHtml(f.details)}${sv}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // ── Narrative paragraph ────────────────────────────────────────────────────
+  const narrativeParts = [];
+  const serviceCount = Object.keys(byService).length;
+  narrativeParts.push(`Analysed <strong>${scanned} resources</strong> across <strong>${serviceCount} services</strong> in ${provider.toUpperCase()} over the last <strong>${days} days</strong>, producing ${findings.length} findings of which ${highCount} are high priority.`);
+
+  const abandonedFindings = findings.filter(f => f.type === 'ABANDONED')
+    .sort((a, b) => (b.metrics?.lastModifiedDaysAgo ?? 0) - (a.metrics?.lastModifiedDaysAgo ?? 0));
+  if (abandonedFindings.length > 0) {
+    const oldest = abandonedFindings[0];
+    const age = oldest.metrics?.lastModifiedDaysAgo;
+    const ageStr = age != null ? (age >= 365 ? `~${(age / 365).toFixed(1)} years` : `${age} days`) : 'an extended period';
+    narrativeParts.push(`<strong>${abandonedFindings.length} Lambda function${abandonedFindings.length > 1 ? 's show' : ' shows'} no recorded invocations and no code updates</strong> within the analysis window — the longest inactive, <code>${escapeHtml(oldest.resourceName)}</code>, has not been modified in approximately ${ageStr}.`);
+  }
+
+  if (deprecatedCount > 0) {
+    narrativeParts.push(`<strong>${deprecatedCount} function${deprecatedCount > 1 ? 's are' : ' is'} running runtimes that have reached end-of-life status</strong> and are no longer covered by vendor security updates.`);
+  }
+
+  const anomalyFindings = findings.filter(f => f.type === 'ANOMALY_DROP');
+  if (anomalyFindings.length > 0) {
+    narrativeParts.push(`<strong>${anomalyFindings.length} function${anomalyFindings.length > 1 ? 's show' : ' shows'} a notable drop in invocation traffic</strong> compared to the prior period, which may indicate a broken upstream dependency.`);
+  }
+
+  if (pipelineCount > 0) {
+    narrativeParts.push(`<strong>${pipelineCount} EventBridge rule${pipelineCount > 1 ? 's and their' : ' and its'} target Lambda function${pipelineCount > 1 ? 's have' : ' has'} both recorded no activity</strong>, suggesting a potentially inactive pipeline.`);
+  }
+
+  const narrativeHTML = `<div class="narrative-bar">${narrativeParts.join(' ')}</div>`;
+
+  const execSummaryHTML = `<div class="exec-summary">
+    <div class="exec-headline">
+      <div class="exec-metric health">
+        <div class="exec-metric-value">${healthCount}</div>
+        <div class="exec-metric-label">Active Health Issues</div>
+        <div class="exec-metric-sub">errors · anomalies · silent pipelines</div>
+      </div>
+      <div class="exec-metric security">
+        <div class="exec-metric-value">${deprecatedCount}</div>
+        <div class="exec-metric-label">Security Risks</div>
+        <div class="exec-metric-sub">EOL or deprecated runtimes</div>
+      </div>
+      <div class="exec-metric waste">
+        <div class="exec-metric-value">$${annualWaste.toFixed(0)}</div>
+        <div class="exec-metric-label">Est. Annual Waste</div>
+        <div class="exec-metric-sub">recoverable with no architectural changes</div>
+      </div>
+    </div>
+    ${top3.length > 0 ? `<div class="exec-divider"></div>
+    <div class="exec-actions-title">Top Actions Right Now</div>${top3HTML}` : ''}
+  </div>`;
+
+  const costContextHTML = costCtx && (totalSpend > 0 || totalSavings > 0) ? `<div class="cost-context-bar">
+    <span class="cost-label">Est. monthly spend:</span>
+    <span class="cost-total">$${totalSpend.toFixed(2)}<span style="font-size:0.7rem;opacity:0.7">/mo</span></span>
+    ${totalSavings > 0 ? `<span class="cost-savings-pill">↓ $${totalSavings.toFixed(2)}/mo recoverable</span>` : ''}
+    <span class="cost-services">${(costCtx.topServices || []).slice(0, 6).map(s => `<span class="cost-chip">${s.service}: <strong>$${s.amount.toFixed(2)}</strong></span>`).join('')}</span>
+  </div>` : '';
+
+  const serviceBreakdownHTML = Object.entries(byService).sort((a, b) => b[1] - a[1]).map(([svc, cnt]) => {
+    const bg  = serviceColors[svc] || '#6b7280';
+    const lbl = serviceIconLabel[svc] || svc[0];
+    return `<div class="service-tile"><div class="service-icon-lg" style="background:${bg}">${lbl}</div><div class="svc-count">${cnt}</div><div class="svc-name">${svc}</div></div>`;
+  }).join('');
+
+  const chartLabels = Object.keys(byService);
+  const chartCounts = Object.values(byService);
+  const chartColors = chartLabels.map(s => serviceColors[s] || '#6b7280');
+
+  // ── Findings rows ──────────────────────────────────────────────────────────
+  const findingsRowsHTML = findings.map((f, idx) => {
+    const bg  = serviceColors[f.service] || '#6b7280';
+    const lbl = serviceIconLabel[f.service] || f.service[0];
+    const metricsHTML = Object.entries(f.metrics || {})
+      .map(([k, v]) => `<div class="metric-row"><span class="metric-label">${fmtKey(k)}</span><span class="metric-value">${fmtVal(k, v)}</span></div>`)
+      .join('');
+    const s = f.estimatedMonthlySavings;
+    const savingsHTML = s > 0
+      ? `<span class="savings-badge">${s < 0.01 ? '< $0.01' : '~$' + s.toFixed(2)}/mo</span>`
+      : '<span class="savings-nil">—</span>';
+
+    const envClass = f.environment ? `env-${f.environment}` : 'env-unknown';
+    const envBadge = f.environment
+      ? `<span class="env-badge ${envClass}">${f.environment}</span>`
+      : '';
+    const teamBadge = f.team
+      ? `<span class="team-badge">${escapeHtml(fmtTeam(f.team))}</span>`
+      : '';
+
+    const alarmSection = f.suggestedAlarm ? `
+      <div class="alarm-section">
+        <h4>${f.type === 'NO_RETENTION' ? 'Remediation Command' : 'Suggested Alarm'}</h4>
+        <pre class="alarm-command" id="alarm-cmd-${idx}">${escapeHtml(f.suggestedAlarm)}</pre>
+        <button class="copy-btn" onclick="copyAlarm(${idx}, event)">Copy</button>
+      </div>` : '';
+
+    return `
+      <tr class="finding-row" id="frow-${idx}" onclick="toggleDetail(${idx})"
+          data-priority="${f.priority}"
+          data-service="${escapeHtml(f.service)}"
+          data-name="${escapeHtml(f.resourceName).toLowerCase()}"
+          data-env="${escapeHtml(f.environment || 'unknown')}"
+          data-team="${escapeHtml(f.team || '')}">
+        <td><span class="badge badge-${f.priority}">${f.priority}</span></td>
+        <td><span class="service-icon-sm" style="background:${bg}">${lbl}</span>${f.service}</td>
+        <td>${envBadge}${teamBadge}<span class="resource-name">${escapeHtml(f.resourceName)}</span></td>
+        <td><span class="badge badge-type badge-type-${f.type}">${f.type.replace(/_/g, ' ')}</span></td>
+        <td class="details-cell">${escapeHtml(f.details)}</td>
+        <td class="savings-cell">${savingsHTML}</td>
+        <td class="chevron-cell"><span class="chevron" id="chev-${idx}">▸</span></td>
+      </tr>
+      <tr class="detail-row" id="detail-${idx}">
+        <td colspan="7">
+          <div class="detail-content">
+            <div class="detail-section">
+              <h4>Metrics (last ${days} days)</h4>
+              ${metricsHTML || '<div class="metric-row"><span class="metric-label">No metrics available</span></div>'}
+            </div>
+            <div class="detail-section">
+              <h4>Recommendation</h4>
+              <div class="recommendation">${escapeHtml(f.recommendation || '')}</div>
+              <div class="resource-arn">${escapeHtml(f.resourceId || '')}</div>
+              ${alarmSection}
+            </div>
+          </div>
+        </td>
+      </tr>`;
+  }).join('');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CloudLens — ${provider.toUpperCase()} Health &amp; Cost Report</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"><\/script>
+  <style>
+    :root {
+      --bg: #0f172a; --surface: #1e293b; --surface-2: #243044;
+      --text: #e2e8f0; --muted: #94a3b8; --border: #334155;
+      --high: #ef4444; --medium: #f97316; --low: #eab308;
+      --aws: #FF9900; --blue: #3b82f6; --green: #22c55e;
+      --radius: 10px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
+
+    /* ── Header ── */
+    .header { background: linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 60%, #4f46e5 100%); padding: 1.75rem 2.5rem; display: flex; align-items: center; justify-content: space-between; }
+    .header h1 { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.5px; }
+    .header h1 .lens { color: #93c5fd; }
+    .header-tagline { color: #bfdbfe; font-size: 0.8rem; margin-top: 0.2rem; }
+    .header-right { text-align: right; color: #bfdbfe; font-size: 0.8rem; line-height: 1.8; }
+    .header-right strong { color: white; }
+
+    .container { max-width: 1440px; margin: 0 auto; padding: 2rem 2.5rem; }
+    .section-title { font-size: 0.7rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.75rem; }
+
+    /* ── Cost context bar ── */
+    .cost-context-bar { background: rgba(59,130,246,0.08); border: 1px solid rgba(59,130,246,0.2); border-radius: var(--radius); padding: 0.75rem 1.25rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem; font-size: 0.8rem; }
+    .cost-label { color: var(--muted); }
+    .cost-total { font-size: 1.1rem; font-weight: 700; color: var(--aws); }
+    .cost-services { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+    .cost-chip { background: var(--surface); border: 1px solid var(--border); border-radius: 99px; padding: 0.2rem 0.6rem; color: var(--muted); font-size: 0.72rem; }
+    .cost-chip strong { color: var(--text); }
+    .cost-savings-pill { background: rgba(34,197,94,0.15); border: 1px solid rgba(34,197,94,0.3); border-radius: 99px; padding: 0.2rem 0.75rem; color: #4ade80; font-size: 0.75rem; font-weight: 700; }
+
+    /* ── Stats ── */
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1rem; margin-bottom: 1.75rem; }
+    .stat-card { background: var(--surface); border-radius: var(--radius); padding: 1.25rem 1.5rem; border: 1px solid var(--border); }
+    .stat-value { font-size: 2.2rem; font-weight: 800; line-height: 1; }
+    .stat-label { color: var(--muted); font-size: 0.75rem; margin-top: 0.3rem; text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat-card.high    .stat-value { color: var(--high); }
+    .stat-card.medium  .stat-value { color: var(--medium); }
+    .stat-card.low     .stat-value { color: var(--low); }
+    .stat-card.total   .stat-value { color: #60a5fa; }
+    .stat-card.spend   .stat-value { color: var(--aws); }
+    .stat-card.savings .stat-value { color: var(--green); }
+    .stat-card.scanned .stat-value { color: var(--muted); }
+    .stat-card.anomaly .stat-value { color: #f87171; }
+    .stat-card.runtime .stat-value { color: #fb923c; }
+    .stat-card.tags    .stat-value { color: #94a3b8; }
+    .stat-card.pipeline   .stat-value { color: #fb923c; }
+    .stat-card.abandoned  .stat-value { color: #fca5a5; }
+
+    /* ── Dashboard row ── */
+    .dashboard-row { display: grid; grid-template-columns: 1fr 280px; gap: 1.5rem; margin-bottom: 1.75rem; align-items: start; }
+    .service-breakdown { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+    .service-tile { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); padding: 1rem 1.25rem; text-align: center; min-width: 100px; }
+    .service-icon-lg { width: 36px; height: 36px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; font-size: 0.65rem; font-weight: 800; color: white; margin-bottom: 0.5rem; }
+    .svc-count { font-size: 1.4rem; font-weight: 700; color: var(--aws); }
+    .svc-name  { font-size: 0.7rem; color: var(--muted); margin-top: 0.15rem; }
+    .chart-card { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); padding: 1.25rem; }
+    .chart-card canvas { max-height: 220px; }
+
+    /* ── Toolbar ── */
+    .toolbar { display: flex; gap: 0.75rem; margin-bottom: 1rem; align-items: center; flex-wrap: wrap; }
+    .search-wrap { flex: 1; min-width: 200px; position: relative; }
+    .search-wrap input { width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.75rem 0.5rem 2rem; color: var(--text); font-size: 0.85rem; outline: none; }
+    .search-wrap input:focus { border-color: var(--blue); }
+    .search-wrap input::placeholder { color: var(--muted); }
+    .search-icon { position: absolute; left: 0.6rem; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 0.8rem; pointer-events: none; }
+    .filter-bar { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+    .filter-label { color: var(--muted); font-size: 0.75rem; }
+    .filter-btn { padding: 0.35rem 0.875rem; border-radius: 99px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: 0.75rem; cursor: pointer; transition: all 0.15s; }
+    .filter-btn:hover { color: var(--text); border-color: var(--blue); }
+    .filter-btn.active { background: rgba(59,130,246,0.15); border-color: var(--blue); color: #93c5fd; }
+    .filter-btn.high.active   { background: rgba(239,68,68,0.15);  border-color: var(--high);   color: #f87171; }
+    .filter-btn.medium.active { background: rgba(249,115,22,0.15); border-color: var(--medium); color: #fb923c; }
+    .filter-btn.low.active    { background: rgba(234,179,8,0.15);  border-color: var(--low);    color: #facc15; }
+    .filter-btn.env-prod.active { background: rgba(239,68,68,0.15);  border-color: var(--high);   color: #f87171; }
+    .filter-btn.env-tst.active  { background: rgba(249,115,22,0.15); border-color: var(--medium); color: #fb923c; }
+    .filter-btn.env-dev.active  { background: rgba(59,130,246,0.15); border-color: var(--blue);   color: #93c5fd; }
+    .csv-btn { padding: 0.4rem 1rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--muted); font-size: 0.75rem; cursor: pointer; white-space: nowrap; }
+    .csv-btn:hover { color: var(--text); border-color: var(--green); }
+    .toolbar-divider { width: 1px; height: 24px; background: var(--border); }
+
+    /* ── Table ── */
+    .table-wrapper { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; }
+    thead th { background: var(--surface-2); padding: 0.75rem 1rem; text-align: left; font-weight: 600; color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
+    tbody tr.finding-row { border-top: 1px solid var(--border); cursor: pointer; transition: background 0.1s; }
+    tbody tr.finding-row:hover { background: var(--surface-2); }
+    tbody tr.finding-row.filtered { display: none; }
+    tbody tr.detail-row { display: none; }
+    tbody tr.detail-row.open { display: table-row; }
+    tbody tr.detail-row.filtered { display: none !important; }
+    td { padding: 0.75rem 1rem; vertical-align: middle; }
+
+    .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 99px; font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
+    .badge-HIGH   { background: rgba(239,68,68,0.15);  color: #f87171; border: 1px solid rgba(239,68,68,0.4); }
+    .badge-MEDIUM { background: rgba(249,115,22,0.15); color: #fb923c; border: 1px solid rgba(249,115,22,0.4); }
+    .badge-LOW    { background: rgba(234,179,8,0.15);  color: #facc15; border: 1px solid rgba(234,179,8,0.4); }
+    .badge-type   { background: rgba(148,163,184,0.1); color: #94a3b8; border: 1px solid rgba(148,163,184,0.2); font-size: 0.6rem; }
+    .badge-type-ANOMALY_DROP       { background: rgba(239,68,68,0.15);  color: #f87171; border: 1px solid rgba(239,68,68,0.4); }
+    .badge-type-PIPELINE_SILENT    { background: rgba(249,115,22,0.15); color: #fb923c; border: 1px solid rgba(249,115,22,0.4); }
+    .badge-type-DEPRECATED_RUNTIME { background: rgba(239,68,68,0.15);  color: #f87171; border: 1px solid rgba(239,68,68,0.4); }
+    .badge-type-MISSING_TAGS       { background: rgba(100,116,139,0.1); color: #94a3b8; border: 1px solid rgba(100,116,139,0.25); }
+    .badge-type-ABANDONED          { background: rgba(220,38,38,0.2);   color: #fca5a5; border: 1px solid rgba(220,38,38,0.5); font-weight: 800; }
+
+    /* ── Environment + team badges ── */
+    .env-badge { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.58rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-right: 0.3rem; vertical-align: middle; }
+    .env-prod    { background: rgba(239,68,68,0.2);  color: #f87171; border: 1px solid rgba(239,68,68,0.35); }
+    .env-tst     { background: rgba(249,115,22,0.2); color: #fb923c; border: 1px solid rgba(249,115,22,0.35); }
+    .env-dev     { background: rgba(59,130,246,0.2); color: #93c5fd; border: 1px solid rgba(59,130,246,0.35); }
+    .env-unknown { background: rgba(100,116,139,0.2); color: #94a3b8; border: 1px solid rgba(100,116,139,0.3); }
+    .team-badge  { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 4px; font-size: 0.58rem; font-weight: 600; background: rgba(139,92,246,0.15); color: #a78bfa; border: 1px solid rgba(139,92,246,0.3); margin-right: 0.3rem; vertical-align: middle; }
+
+    .service-icon-sm { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 5px; font-size: 0.55rem; font-weight: 800; color: white; margin-right: 0.4rem; vertical-align: middle; }
+    .resource-name { font-family: 'SF Mono','Cascadia Code','Fira Code',Consolas,monospace; font-size: 0.8rem; }
+    .details-cell  { color: var(--muted); max-width: 360px; }
+    .chevron-cell  { color: var(--muted); font-size: 0.8rem; width: 30px; }
+    .savings-cell  { white-space: nowrap; }
+    .savings-badge { background: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid rgba(34,197,94,0.3); border-radius: 99px; padding: 0.2rem 0.55rem; font-size: 0.7rem; font-weight: 700; }
+    .savings-nil   { color: #475569; font-size: 0.8rem; }
+
+    /* ── Detail row ── */
+    tr.detail-row td { background: #131f33; padding: 1.25rem 1.5rem; border-top: 1px solid var(--border); }
+    .detail-content { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
+    .detail-section h4 { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.6rem; font-weight: 600; }
+    .metric-row { display: flex; justify-content: space-between; padding: 0.3rem 0; border-bottom: 1px solid var(--border); font-size: 0.8rem; }
+    .metric-row:last-child { border-bottom: none; }
+    .metric-label { color: var(--muted); }
+    .metric-value { font-weight: 600; font-family: 'SF Mono',Consolas,monospace; }
+    .recommendation { background: rgba(59,130,246,0.08); border: 1px solid rgba(59,130,246,0.25); border-radius: 8px; padding: 0.75rem 1rem; font-size: 0.8rem; color: #93c5fd; line-height: 1.6; white-space: pre-wrap; }
+    .resource-arn { margin-top: 0.5rem; font-size: 0.7rem; color: #475569; font-family: monospace; word-break: break-all; }
+
+    /* ── Alarm / remediation section ── */
+    .alarm-section { margin-top: 1rem; }
+    .alarm-section h4 { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 0.5rem; font-weight: 600; }
+    .alarm-command { background: #0d1929; border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 1rem; font-family: 'SF Mono','Cascadia Code',Consolas,monospace; font-size: 0.72rem; color: #7dd3fc; white-space: pre; overflow-x: auto; margin-bottom: 0.5rem; line-height: 1.7; }
+    .copy-btn { padding: 0.3rem 0.85rem; background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3); border-radius: 6px; color: #93c5fd; font-size: 0.72rem; cursor: pointer; transition: background 0.15s; }
+    .copy-btn:hover { background: rgba(59,130,246,0.3); }
+    .copy-btn.copied { color: #4ade80; border-color: rgba(34,197,94,0.4); background: rgba(34,197,94,0.1); }
+
+    /* ── Executive summary ── */
+    .exec-summary { background: linear-gradient(135deg, rgba(30,58,138,0.25), rgba(79,70,229,0.1)); border: 1px solid rgba(99,102,241,0.3); border-radius: var(--radius); padding: 1.75rem 2rem; margin-bottom: 1.75rem; }
+    .exec-headline { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-bottom: 1.5rem; }
+    .exec-metric { text-align: center; padding: 0.5rem; }
+    .exec-metric-value { font-size: 2.8rem; font-weight: 800; line-height: 1; }
+    .exec-metric-label { font-size: 0.75rem; font-weight: 600; margin-top: 0.35rem; text-transform: uppercase; letter-spacing: 0.5px; }
+    .exec-metric-sub { font-size: 0.68rem; color: var(--muted); margin-top: 0.2rem; }
+    .exec-metric.health .exec-metric-value   { color: #f87171; }
+    .exec-metric.health .exec-metric-label   { color: #f87171; }
+    .exec-metric.security .exec-metric-value { color: #fb923c; }
+    .exec-metric.security .exec-metric-label { color: #fb923c; }
+    .exec-metric.waste .exec-metric-value    { color: #4ade80; }
+    .exec-metric.waste .exec-metric-label    { color: #4ade80; }
+    .exec-divider { height: 1px; background: var(--border); margin-bottom: 1.25rem; }
+    .exec-actions-title { font-size: 0.65rem; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; font-weight: 600; margin-bottom: 0.75rem; }
+    .action-card { display: flex; gap: 1rem; padding: 0.75rem 0; border-bottom: 1px solid rgba(51,65,85,0.5); align-items: flex-start; }
+    .action-card:last-child { border-bottom: none; padding-bottom: 0; }
+    .action-num { font-size: 1.3rem; color: #818cf8; font-weight: 800; min-width: 1.75rem; line-height: 1.4; }
+    .action-body { flex: 1; }
+    .action-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.3rem; flex-wrap: wrap; }
+    .action-service { font-size: 0.72rem; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 0.1rem 0.4rem; }
+    .action-resource { font-family: 'SF Mono','Cascadia Code',Consolas,monospace; font-size: 0.8rem; color: var(--text); font-weight: 600; }
+    .action-detail { font-size: 0.8rem; color: var(--muted); line-height: 1.5; }
+
+    /* ── Methodology ── */
+    .methodology { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 1rem; }
+    .methodology-title { padding: 0.75rem 1.25rem; font-size: 0.75rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; cursor: pointer; list-style: none; display: flex; align-items: center; gap: 0.5rem; }
+    .methodology-title::before { content: '▸'; font-size: 0.65rem; transition: transform 0.15s; }
+    details.methodology[open] .methodology-title::before { transform: rotate(90deg); }
+    .methodology-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; padding: 0 1.25rem 1.25rem; }
+    .meth-col ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+    .meth-col ul li { font-size: 0.78rem; color: var(--muted); padding-left: 1rem; position: relative; line-height: 1.5; }
+    .meth-col ul li::before { content: '·'; position: absolute; left: 0; color: var(--border); }
+    .meth-col ul li em { color: #94a3b8; font-style: normal; font-weight: 600; }
+    .meth-heading { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.6rem; }
+    .high-text   { color: var(--high); }
+    .medium-text { color: var(--medium); }
+    .low-text    { color: var(--low); }
+    .meth-note { margin-top: 0.75rem; font-size: 0.72rem; color: #475569; line-height: 1.5; border-top: 1px solid var(--border); padding-top: 0.6rem; }
+
+    /* ── Narrative bar ── */
+    .narrative-bar { background: rgba(99,102,241,0.07); border: 1px solid rgba(99,102,241,0.2); border-radius: var(--radius); padding: 1rem 1.5rem; margin-bottom: 1.5rem; font-size: 0.875rem; color: #cbd5e1; line-height: 1.75; }
+    .narrative-bar strong { color: #e2e8f0; }
+    .narrative-bar code { font-family: 'SF Mono','Cascadia Code',Consolas,monospace; font-size: 0.78rem; color: #93c5fd; background: rgba(59,130,246,0.1); padding: 0.1rem 0.35rem; border-radius: 4px; }
+
+    .no-findings { text-align: center; padding: 3rem; color: var(--muted); font-size: 0.9rem; }
+    footer { text-align: center; padding: 1.5rem; color: #475569; font-size: 0.75rem; border-top: 1px solid var(--border); margin-top: 2rem; }
+  </style>
+</head>
+<body>
+<div class="header">
+  <div>
+    <h1>Cloud<span class="lens">Lens</span></h1>
+    <div class="header-tagline">Operational Health &amp; Cost Intelligence — ${provider.toUpperCase()}</div>
+  </div>
+  <div class="header-right">
+    <div>Generated <strong>${now.toUTCString()}</strong></div>
+    <div>Analysis window <strong>last ${days} days</strong></div>
+  </div>
+</div>
+
+<div class="container">
+
+  ${narrativeHTML}
+
+  ${execSummaryHTML}
+
+  <div class="section-title">At a Glance</div>
+  <div class="stats-grid">
+    <div class="stat-card scanned"><div class="stat-value">${scanned}</div><div class="stat-label">Resources Scanned</div></div>
+    <div class="stat-card total"><div class="stat-value">${findings.length}</div><div class="stat-label">Total Findings</div></div>
+    <div class="stat-card high"><div class="stat-value">${highCount}</div><div class="stat-label">High Priority</div></div>
+    ${abandonedCount > 0  ? `<div class="stat-card abandoned"><div class="stat-value">${abandonedCount}</div><div class="stat-label">Abandoned (28d+)</div></div>` : ''}
+    ${anomalyCount > 0    ? `<div class="stat-card anomaly"><div class="stat-value">${anomalyCount}</div><div class="stat-label">Traffic Anomalies</div></div>` : ''}
+    ${pipelineCount > 0   ? `<div class="stat-card pipeline"><div class="stat-value">${pipelineCount}</div><div class="stat-label">Silent Pipelines</div></div>` : ''}
+    ${deprecatedCount > 0 ? `<div class="stat-card runtime"><div class="stat-value">${deprecatedCount}</div><div class="stat-label">Deprecated Runtimes</div></div>` : ''}
+    <div class="stat-card medium"><div class="stat-value">${mediumCount}</div><div class="stat-label">Medium Priority</div></div>
+    <div class="stat-card low"><div class="stat-value">${lowCount}</div><div class="stat-label">Low Priority</div></div>
+    ${totalSpend > 0   ? `<div class="stat-card spend"><div class="stat-value">$${totalSpend.toFixed(0)}</div><div class="stat-label">Est. Monthly Spend</div></div>` : ''}
+    ${totalSavings > 0 ? `<div class="stat-card savings"><div class="stat-value">$${totalSavings.toFixed(2)}</div><div class="stat-label">Recoverable/mo</div></div>` : ''}
+    ${missingTagCount > 0 ? `<div class="stat-card tags"><div class="stat-value">${missingTagCount}</div><div class="stat-label">Untagged Resources</div></div>` : ''}
+  </div>
+
+  ${costContextHTML}
+
+  ${Object.keys(byService).length > 0 ? `
+  <div class="section-title">Breakdown</div>
+  <div class="dashboard-row">
+    <div class="service-breakdown">${serviceBreakdownHTML}</div>
+    <div class="chart-card"><canvas id="doughnut-chart"></canvas></div>
+  </div>` : ''}
+
+  <details class="methodology">
+    <summary class="methodology-title">How findings are classified</summary>
+    <div class="methodology-grid">
+      <div class="meth-col">
+        <div class="meth-heading high-text">HIGH</div>
+        <ul>
+          <li>Zero invocations over the window <em>and</em> no code changes in 28+ days (abandoned)</li>
+          <li>Traffic drop ≥ 80% vs the prior half-window</li>
+          <li>Error rate &gt; 20% of invocations</li>
+          <li>Memory utilisation below 30% of configured size</li>
+          <li>Runtime at EOL status with no security patch coverage</li>
+          <li>Provisioned Concurrency with zero utilisation</li>
+        </ul>
+      </div>
+      <div class="meth-col">
+        <div class="meth-heading medium-text">MEDIUM</div>
+        <ul>
+          <li>Fewer than 10 invocations over the analysis window</li>
+          <li>Error rate between 5–20%</li>
+          <li>Memory utilisation between 30–50% of configured size</li>
+          <li>Runtime approaching end-of-life (deprecated, not yet EOL)</li>
+          <li>DynamoDB table consumed &lt; 10% of provisioned capacity</li>
+        </ul>
+      </div>
+      <div class="meth-col">
+        <div class="meth-heading low-text">LOW</div>
+        <ul>
+          <li>Missing recommended tags (Environment, Team/Owner)</li>
+          <li>S3 bucket with zero objects</li>
+          <li>Low-traffic findings on non-production environments</li>
+        </ul>
+        <div class="meth-note">Priority is automatically downgraded one level for test/staging environments and two levels for dev, to reduce noise on non-production resources.</div>
+      </div>
+    </div>
+  </details>
+
+  <div class="toolbar">
+    <div class="search-wrap">
+      <span class="search-icon">⌕</span>
+      <input type="text" id="search-input" placeholder="Search resource name..." oninput="applySearch(this.value)">
+    </div>
+    <div class="filter-bar">
+      <span class="filter-label">Priority:</span>
+      <button class="filter-btn priority-btn active" onclick="setPriorityFilter('ALL',this)">All (${findings.length})</button>
+      <button class="filter-btn priority-btn high"   onclick="setPriorityFilter('HIGH',this)">High (${highCount})</button>
+      <button class="filter-btn priority-btn medium" onclick="setPriorityFilter('MEDIUM',this)">Med (${mediumCount})</button>
+      <button class="filter-btn priority-btn low"    onclick="setPriorityFilter('LOW',this)">Low (${lowCount})</button>
+    </div>
+    <div class="toolbar-divider"></div>
+    <div class="filter-bar">
+      <span class="filter-label">Env:</span>
+      <button class="filter-btn env-btn active"   onclick="setEnvFilter('ALL',this)">All</button>
+      <button class="filter-btn env-btn env-prod" onclick="setEnvFilter('prod',this)">Prod</button>
+      <button class="filter-btn env-btn env-tst"  onclick="setEnvFilter('tst',this)">Tst</button>
+      <button class="filter-btn env-btn env-dev"  onclick="setEnvFilter('dev',this)">Dev</button>
+    </div>
+    <button class="csv-btn" onclick="exportCSV()">⬇ Export CSV</button>
+  </div>
+
+  <div class="table-wrapper">
+    ${findings.length === 0
+      ? '<div class="no-findings">No findings — infrastructure looks optimised for this analysis window.</div>'
+      : `<table id="findings-table">
+          <thead><tr>
+            <th>Priority</th><th>Service</th><th>Resource</th><th>Type</th><th>Details</th><th>Est. Savings/mo</th><th></th>
+          </tr></thead>
+          <tbody>${findingsRowsHTML}</tbody>
+        </table>`
+    }
+  </div>
+
+</div>
+
+<footer>CloudLens — read-only, no changes made to any resource &nbsp;·&nbsp; ${now.toUTCString()}</footer>
+
+<script>
+  var allFindings = ${JSON.stringify(findings.map((f, i) => ({
+    idx:          i,
+    priority:     f.priority,
+    service:      f.service,
+    resourceName: f.resourceName,
+    type:         f.type,
+    details:      f.details,
+    region:       f.region,
+    savings:      f.estimatedMonthlySavings || 0,
+    environment:  f.environment || 'unknown',
+    team:         f.team || '',
+  })))};
+
+  var activeFilter    = 'ALL';
+  var activeEnvFilter = 'ALL';
+  var activeSearch    = '';
+
+  // ── Doughnut chart ────────────────────────────────────────────────────────
+  (function() {
+    var canvas = document.getElementById('doughnut-chart');
+    if (!canvas || typeof Chart === 'undefined') return;
+    new Chart(canvas, {
+      type: 'doughnut',
+      data: {
+        labels: ${JSON.stringify(chartLabels)},
+        datasets: [{ data: ${JSON.stringify(chartCounts)}, backgroundColor: ${JSON.stringify(chartColors)}, borderWidth: 2, borderColor: '#1e293b' }]
+      },
+      options: {
+        plugins: { legend: { position: 'bottom', labels: { color: '#94a3b8', font: { size: 11 }, padding: 8, boxWidth: 12 } } },
+        cutout: '65%',
+      }
+    });
+  })();
+
+  // ── Toggle detail row ─────────────────────────────────────────────────────
+  function toggleDetail(idx) {
+    var row  = document.getElementById('detail-' + idx);
+    var chev = document.getElementById('chev-' + idx);
+    row.style.display = '';
+    var open = row.classList.toggle('open');
+    chev.textContent = open ? '▾' : '▸';
+  }
+
+  // ── Filters ───────────────────────────────────────────────────────────────
+  function applySearch(val) { activeSearch = val.toLowerCase().trim(); renderVisibility(); }
+
+  function setPriorityFilter(filter, btn) {
+    document.querySelectorAll('.priority-btn').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    activeFilter = filter;
+    renderVisibility();
+  }
+
+  function setEnvFilter(env, btn) {
+    document.querySelectorAll('.env-btn').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    activeEnvFilter = env;
+    renderVisibility();
+  }
+
+  function renderVisibility() {
+    allFindings.forEach(function(f) {
+      var frow = document.getElementById('frow-'   + f.idx);
+      var drow = document.getElementById('detail-' + f.idx);
+      var chev = document.getElementById('chev-'   + f.idx);
+      var matchPriority = activeFilter    === 'ALL' || activeFilter    === f.priority;
+      var matchEnv      = activeEnvFilter === 'ALL' || activeEnvFilter === f.environment;
+      var matchSearch   = !activeSearch   || f.resourceName.toLowerCase().includes(activeSearch);
+      var visible = matchPriority && matchEnv && matchSearch;
+      if (frow) frow.classList.toggle('filtered', !visible);
+      if (drow) { drow.classList.toggle('filtered', !visible); drow.classList.remove('open'); }
+      if (chev) chev.textContent = '▸';
+    });
+  }
+
+  // ── Copy alarm command ────────────────────────────────────────────────────
+  function copyAlarm(idx, evt) {
+    evt.stopPropagation();
+    var el  = document.getElementById('alarm-cmd-' + idx);
+    var btn = evt.target;
+    if (!el) return;
+    navigator.clipboard.writeText(el.textContent).then(function() {
+      var orig = btn.textContent;
+      btn.textContent = '✓ Copied';
+      btn.classList.add('copied');
+      setTimeout(function() { btn.textContent = orig; btn.classList.remove('copied'); }, 2000);
+    }).catch(function() {
+      var range = document.createRange();
+      range.selectNode(el);
+      window.getSelection().removeAllRanges();
+      window.getSelection().addRange(range);
+    });
+  }
+
+  // ── CSV export ────────────────────────────────────────────────────────────
+  function exportCSV() {
+    var rows = [['Priority','Service','Resource','Type','Details','Est Savings/mo','Region','Environment','Team']];
+    allFindings.forEach(function(f) {
+      rows.push([
+        f.priority, f.service,
+        '"' + f.resourceName.replace(/"/g,'""') + '"',
+        f.type,
+        '"' + f.details.replace(/"/g,'""') + '"',
+        f.savings > 0 ? '$' + f.savings.toFixed(2) : '',
+        f.region,
+        f.environment,
+        f.team,
+      ]);
+    });
+    var csv  = rows.map(r => r.join(',')).join('\\n');
+    var blob = new Blob([csv], { type: 'text/csv' });
+    var url  = URL.createObjectURL(blob);
+    var a    = document.createElement('a');
+    a.href   = url;
+    a.download = 'cloudlens-findings.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+<\/script>
+</body>
+</html>`;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Format team badge: keeps label prefix, strips email domain if present.
+//   "Owner: James.Milani@allegion.com" → "Owner: James.Milani"
+function fmtTeam(team) {
+  if (!team) return '';
+  const colonIdx = team.indexOf(': ');
+  const prefix = colonIdx !== -1 ? team.slice(0, colonIdx + 2) : '';
+  const raw    = colonIdx !== -1 ? team.slice(colonIdx + 2) : team;
+  const value  = raw.includes('@') ? raw.split('@')[0] : raw;
+  return prefix + value;
+}
+
+const METRIC_LABELS = {
+  invocations:              'Invocations',
+  avgDurationMs:            'Avg Duration',
+  errors:                   'Errors',
+  throttles:                'Throttles',
+  configuredMemMB:          'Configured Memory',
+  avgMemUsedMB:             'Avg Memory Used',
+  peakMemUsedMB:            'Peak Memory Used',
+  memUtilisationPct:        'Memory Utilisation',
+  avgColdStartMs:           'Avg Cold Start',
+  lastModifiedDaysAgo:      'Last Modified',
+  runtime:                  'Runtime',
+  trafficDropPct:           'Traffic Drop',
+  provisionedRCU:           'Provisioned RCU',
+  provisionedWCU:           'Provisioned WCU',
+  consumedRCU:              'Consumed RCU',
+  consumedWCU:              'Consumed WCU',
+  rcuUtilisationPct:        'RCU Utilisation',
+  wcuUtilisationPct:        'WCU Utilisation',
+  messagesPublished:        'Messages Published',
+  messagesSent:             'Messages Sent',
+  messagesReceived:         'Messages Received',
+  currentlyVisible:         'Visible Messages',
+  oldestMessageAge:         'Oldest Message Age',
+  storedBytes:              'Stored',
+  retentionDays:            'Retention',
+  incomingEventsOverWindow: 'Incoming Events',
+  incomingEventsPerDay:     'Avg Events/Day',
+  objectCount:              'Object Count',
+  ruleType:                 'Rule Type',
+  schedule:                 'Schedule',
+};
+
+function fmtKey(k) {
+  if (METRIC_LABELS[k]) return METRIC_LABELS[k];
+  const prevMatch = k.match(/^invocationsPrev(\d+)d$/);
+  if (prevMatch) return `Invocations (prev ${prevMatch[1]}d)`;
+  const currMatch = k.match(/^invocationsCurr(\d+)d$/);
+  if (currMatch) return `Invocations (last ${currMatch[1]}d)`;
+  return k;
+}
+
+function fmtVal(k, v) {
+  if (k.endsWith('Pct'))            return v + '%';
+  if (k === 'trafficDropPct')       return v + '%';
+  if (k.endsWith('MB'))             return v + ' MB';
+  if (k === 'avgDurationMs' || k === 'avgColdStartMs') return v + ' ms';
+  if (k === 'lastModifiedDaysAgo')  return v + ' days ago';
+  if (k === 'storedBytes')          return fmtBytes(v);
+  if (typeof v === 'number')        return v.toLocaleString();
+  return String(v);
+}
+
+function fmtBytes(bytes) {
+  if (!bytes || bytes === 0) return '0 B';
+  const k = 1024, sizes = ['B','KB','MB','GB','TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+module.exports = { generateReport };

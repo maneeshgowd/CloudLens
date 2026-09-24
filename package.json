@@ -1,0 +1,33 @@
+{
+  "name": "cloudlens",
+  "version": "1.0.0",
+  "description": "Multi-cloud resource optimisation tool — AWS cost analysis",
+  "main": "cloudlens.js",
+  "scripts": {
+    "start": "node cloudlens.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0",
+    "@aws-sdk/client-api-gateway": "^3.1133.0",
+    "@aws-sdk/client-apigatewayv2": "^3.1133.0",
+    "@aws-sdk/client-cloudfront": "^3.1133.0",
+    "@aws-sdk/client-cloudwatch": "^3.600.0",
+    "@aws-sdk/client-cloudwatch-logs": "^3.600.0",
+    "@aws-sdk/client-cost-explorer": "^3.600.0",
+    "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/client-ec2": "^3.1133.0",
+    "@aws-sdk/client-ecs": "^3.1133.0",
+    "@aws-sdk/client-eventbridge": "^3.600.0",
+    "@aws-sdk/client-kafka": "^3.1137.0",
+    "@aws-sdk/client-lambda": "^3.600.0",
+    "@aws-sdk/client-s3": "^3.600.0",
+    "@aws-sdk/client-secrets-manager": "^3.1133.0",
+    "@aws-sdk/client-sns": "^3.600.0",
+    "@aws-sdk/client-sqs": "^3.600.0",
+    "commander": "^11.1.0",
+    "pptxgenjs": "^4.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
