@@ -25,6 +25,7 @@ function generateReport({ findings, summary, provider, days }) {
     'ECS':                     '#06b6d4', 'NAT Gateway':             '#64748b',
     'API Gateway':             '#8b5cf6', 'Secrets Manager':         '#ec4899',
     'CloudFront':              '#0ea5e9', 'MSK':                     '#FF6B35',
+    'Security Groups':         '#DC2626', 'IAM':                     '#DD344C',
     'Azure Functions':         '#0078d4', 'Virtual Machines':        '#0078d4',
     'App Service':             '#0078d4', 'Blob Storage':            '#0072c6',
     'Cosmos DB':               '#0072c6', 'Service Bus':             '#0078d4',
@@ -34,7 +35,8 @@ function generateReport({ findings, summary, provider, days }) {
     'Lambda':'λ', 'Provisioned Concurrency':'PC', 'DynamoDB':'DB', 'SNS':'SNS',
     'S3':'S3', 'EventBridge':'EB', 'Log Groups':'CW', 'SQS':'SQS', 'ECS':'ECS',
     'NAT Gateway':'NAT', 'API Gateway':'API', 'Secrets Manager':'SM', 'CloudFront':'CF',
-    'MSK':'MSK', 'Azure Functions':'fn', 'Virtual Machines':'VM', 'App Service':'APP',
+    'MSK':'MSK', 'Security Groups':'SG', 'IAM':'IAM',
+    'Azure Functions':'fn', 'Virtual Machines':'VM', 'App Service':'APP',
     'Blob Storage':'BLOB', 'Cosmos DB':'DB', 'Service Bus':'SB', 'Log Analytics':'LA', 'Azure Monitor':'MON',
   };
 
@@ -59,6 +61,10 @@ function generateReport({ findings, summary, provider, days }) {
     MSK_DURABILITY_RISK:'QUEUE',
     MISSING_TAGS:       'GOVERNANCE',
     NO_RETENTION:       'GOVERNANCE',
+    S3_PUBLIC_ACCESS:   'SECURITY',
+    SG_OPEN_INGRESS:    'SECURITY',
+    IAM_KEY_STALE:      'SECURITY',
+    SECRET_NO_ROTATION: 'SECURITY',
   };
   function typeGroupOf(t) { return TYPE_TO_GROUP[t] || 'OTHER'; }
 
@@ -77,7 +83,7 @@ function generateReport({ findings, summary, provider, days }) {
     { type:'HIGH_ERROR_RATE',    icon:'✕',  label:'High Error Rate',  desc:'Functions where a significant percentage of invocations are failing. Compute cost is being spent on failed work that produces no value for users or downstream systems.', color:'#DC2626' },
     { type:'IDLE',               icon:'□',  label:'Idle Resources',   desc:'Resources consuming allocated capacity (and cost) with minimal or zero actual usage — over-allocated memory, idle provisioned concurrency, underutilised clusters.', color:'#EA580C' },
     { type:'QUEUE',              icon:'▣',  label:'Queue Issues',     desc:'Message queues (SQS, dead-letter queues) with stuck or unprocessed messages — indicating processing failures or backlog accumulation that may affect downstream consumers.', color:'#EA580C' },
-    { type:'GOVERNANCE',         icon:'▤',  label:'Governance',       desc:'Missing resource tags, absent log retention policies, and other hygiene issues that affect cost attribution, security policies, and compliance requirements.', color:'#64748B' },
+    { type:'SECURITY',           icon:'⚑',  label:'Security',         desc:'Critical security misconfigurations — publicly accessible S3 buckets, security groups open to the internet, IAM credentials overdue for rotation, and secrets with no automatic rotation. Each finding here represents an open attack vector.', color:'#DC2626' },
   ];
 
   const tabsHTML = TAB_DEFS
@@ -116,11 +122,198 @@ function generateReport({ findings, summary, provider, days }) {
     MSK_DISK_CRITICAL:   'Disk usage on this MSK cluster is critically high. When disks fill completely, Kafka brokers can fail and data can be lost.',
     MSK_IDLE:            'This Kafka (MSK) cluster has had minimal or zero message traffic. MSK is one of the more expensive AWS services — an idle cluster is significant cost waste.',
     MSK_UNDERUTILIZED:   'This MSK cluster has low throughput relative to its provisioned broker capacity. Consider scaling down to a smaller broker type to reduce cost.',
+    S3_PUBLIC_ACCESS:    'This S3 bucket does not have all four Block Public Access settings enabled. Depending on bucket ACLs and bucket policies, this bucket may be readable or writable by anyone on the internet — including its contents, which could contain sensitive data.',
+    SG_OPEN_INGRESS:     'This EC2 security group has an ingress rule that allows connections from any IP address on the internet (0.0.0.0/0). The exposed port gives any external actor a direct network path to your resources — a common entry point for automated scanning, credential brute-forcing, and exploitation.',
+    IAM_KEY_STALE:       'This IAM access key has not been rotated since it was created. Long-lived credentials are a primary vector for account compromise — if the key was ever exposed in code, logs, or a third-party tool, it remains valid until explicitly rotated. CIS AWS Benchmark 1.14 requires rotation every 90 days.',
+    SECRET_NO_ROTATION:  'This secret is being actively used but has automatic rotation disabled. A static credential that never rotates remains valid indefinitely — if it is ever leaked, there is no automatic recovery. AWS Secrets Manager supports fully-managed rotation for many secret types including RDS, Redshift, and custom Lambda-based rotators.',
+  };
+
+  // ── Compliance mapping ─────────────────────────────────────────────────────
+  // Maps each finding type to the compliance controls it triggers.
+  const COMPLIANCE_MAP = {
+    DEPRECATED_RUNTIME: [
+      { framework: 'SOC 2',     control: 'CC7.1',    desc: 'Change management — unpatched runtime CVEs are a permanent open risk' },
+      { framework: 'CIS AWS',   control: 'Lambda.2', desc: 'Ensure Lambda functions do not use deprecated runtimes' },
+      { framework: 'ISO 27001', control: 'A.12.6.1', desc: 'Management of technical vulnerabilities' },
+    ],
+    ABANDONED: [
+      { framework: 'SOC 2',     control: 'CC6.3',    desc: 'Dead code retains live IAM access — logical access not deprovisioned' },
+      { framework: 'CIS AWS',   control: 'IAM.1',    desc: 'Least privilege — unused functions hold excess permissions' },
+      { framework: 'ISO 27001', control: 'A.9.2.5',  desc: 'Review of user access rights — stale function permissions not removed' },
+    ],
+    PIPELINE_SILENT: [
+      { framework: 'SOC 2',     control: 'CC7.2',    desc: 'System monitoring — broken pipeline was not detected by alerting' },
+      { framework: 'ISO 27001', control: 'A.12.4.1', desc: 'Event logging — pipeline failure went undetected' },
+    ],
+    ANOMALY_DROP: [
+      { framework: 'SOC 2',     control: 'CC7.2',    desc: 'System monitoring — traffic anomaly not caught by existing alarms' },
+      { framework: 'ISO 27001', control: 'A.16.1.2', desc: 'Reporting information security events — anomaly not surfaced' },
+    ],
+    HIGH_ERROR_RATE: [
+      { framework: 'SOC 2',     control: 'A1.2',     desc: 'Availability — sustained error rate breaches service availability commitments' },
+      { framework: 'ISO 27001', control: 'A.17.1.1', desc: 'Planning information security continuity' },
+    ],
+    MISSING_TAGS: [
+      { framework: 'SOC 2',     control: 'CC1.4',    desc: 'Resource accountability — untagged resources have no designated owner' },
+      { framework: 'CIS AWS',   control: 'TAG.1',    desc: 'Ensure all AWS resources have required tags applied' },
+      { framework: 'ISO 27001', control: 'A.8.1.1',  desc: 'Inventory of assets — untagged resources not in asset register' },
+    ],
+    NO_RETENTION: [
+      { framework: 'SOC 2',     control: 'CC7.2',    desc: 'Logging — indefinite retention may conflict with data handling policies' },
+      { framework: 'CIS AWS',   control: 'CW.1',     desc: 'Ensure log groups have a retention policy configured' },
+      { framework: 'ISO 27001', control: 'A.12.4.1', desc: 'Event logging — uncontrolled log retention period' },
+    ],
+    IDLE: [
+      { framework: 'SOC 2',     control: 'CC9.1',    desc: 'Risk assessment — idle resources increase attack surface unnecessarily' },
+      { framework: 'ISO 27001', control: 'A.8.1.4',  desc: 'Return of assets — unneeded resources should be decommissioned' },
+    ],
+    PC_IDLE: [
+      { framework: 'SOC 2',     control: 'CC9.1',    desc: 'Risk management — allocated capacity with zero utilisation' },
+    ],
+    PC_OVER_PROVISIONED: [
+      { framework: 'SOC 2',     control: 'CC9.1',    desc: 'Risk management — over-provisioned capacity with no justification' },
+    ],
+    OVER_ALLOCATED: [
+      { framework: 'SOC 2',     control: 'CC9.1',    desc: 'Risk management — configured resources significantly exceed actual usage' },
+    ],
+    THROTTLED: [
+      { framework: 'SOC 2',     control: 'A1.2',     desc: 'Availability — throttled invocations degrade service to users' },
+      { framework: 'ISO 27001', control: 'A.17.1.1', desc: 'Planning information security continuity' },
+    ],
+    DLQ_MESSAGES: [
+      { framework: 'SOC 2',     control: 'A1.2',     desc: 'Availability — unprocessed DLQ messages indicate downstream processing failures' },
+      { framework: 'ISO 27001', control: 'A.17.2.1', desc: 'Availability of information processing facilities' },
+    ],
+    STALE_MESSAGES: [
+      { framework: 'SOC 2',     control: 'A1.2',     desc: 'Availability — consumer stopped processing; queue backlog accumulating' },
+      { framework: 'ISO 27001', control: 'A.17.1.1', desc: 'Planning information security continuity' },
+    ],
+    MSK_OFFLINE: [
+      { framework: 'SOC 2',     control: 'A1.2',     desc: 'Availability — offline Kafka partitions block producers and consumers' },
+      { framework: 'ISO 27001', control: 'A.17.2.1', desc: 'Availability of information processing facilities' },
+    ],
+    MSK_DURABILITY_RISK: [
+      { framework: 'SOC 2',     control: 'C1.2',     desc: 'Processing integrity — low replication factor risks data loss on broker failure' },
+      { framework: 'ISO 27001', control: 'A.12.3.1', desc: 'Information backup — insufficient replication is a backup risk' },
+    ],
+    MSK_DISK_CRITICAL: [
+      { framework: 'SOC 2',     control: 'A1.2',     desc: 'Availability — full disks can cause broker failures and data loss' },
+      { framework: 'ISO 27001', control: 'A.12.1.3', desc: 'Capacity management — disk capacity not managed proactively' },
+    ],
+    MSK_IDLE: [
+      { framework: 'SOC 2',     control: 'CC9.1',    desc: 'Risk management — idle MSK cluster is a high-cost unnecessary asset' },
+      { framework: 'ISO 27001', control: 'A.8.1.4',  desc: 'Return of assets — idle cluster should be decommissioned' },
+    ],
+    MSK_UNDERUTILIZED: [
+      { framework: 'SOC 2',     control: 'CC9.1',    desc: 'Risk management — over-provisioned cluster relative to actual throughput' },
+    ],
+    S3_PUBLIC_ACCESS: [
+      { framework: 'SOC 2',     control: 'CC6.1',    desc: 'Logical access — publicly accessible storage is an unauthorised access risk' },
+      { framework: 'CIS AWS',   control: 'S3.2',     desc: 'Ensure S3 buckets have Block Public Access settings enabled' },
+      { framework: 'ISO 27001', control: 'A.9.4.1',  desc: 'Information access restriction — data must not be publicly accessible' },
+    ],
+    SG_OPEN_INGRESS: [
+      { framework: 'SOC 2',     control: 'CC6.6',    desc: 'Network access — open ingress provides direct internet access to internal resources' },
+      { framework: 'CIS AWS',   control: 'EC2.18',   desc: 'Ensure security groups do not allow unrestricted access to high-risk ports' },
+      { framework: 'ISO 27001', control: 'A.13.1.3', desc: 'Segregation in networks — unrestricted ingress violates network segregation' },
+    ],
+    IAM_KEY_STALE: [
+      { framework: 'SOC 2',     control: 'CC6.1',    desc: 'Logical access — stale credentials increase the window of compromise' },
+      { framework: 'CIS AWS',   control: 'IAM.3',    desc: 'Ensure access keys are rotated within 90 days' },
+      { framework: 'ISO 27001', control: 'A.9.4.3',  desc: 'Password management system — credentials must be regularly rotated' },
+    ],
+    SECRET_NO_ROTATION: [
+      { framework: 'SOC 2',     control: 'CC6.1',    desc: 'Logical access — non-rotating secrets are permanently valid if leaked' },
+      { framework: 'CIS AWS',   control: 'SecretsManager.1', desc: 'Ensure Secrets Manager secrets are configured with automatic rotation' },
+      { framework: 'ISO 27001', control: 'A.9.4.3',  desc: 'Password management — static credentials must be rotated regularly' },
+    ],
   };
 
   const totalSavings  = findings.reduce((sum, f) => sum + (f.estimatedMonthlySavings || 0), 0);
   const totalSpend    = costCtx?.totalEstimatedCost ?? 0;
   const serviceCount  = Object.keys(byService).length;
+
+  // ── Compliance stats ───────────────────────────────────────────────────────
+  const COMP_FRAMEWORKS = ['SOC 2', 'CIS AWS', 'ISO 27001'];
+  const compControlsByFw  = { 'SOC 2': new Set(), 'CIS AWS': new Set(), 'ISO 27001': new Set() };
+  const compFindingsByFw  = { 'SOC 2': 0, 'CIS AWS': 0, 'ISO 27001': 0 };
+  for (const f of findings) {
+    const rules = COMPLIANCE_MAP[f.type] || [];
+    const seenFw = new Set();
+    for (const r of rules) {
+      if (compControlsByFw[r.framework]) compControlsByFw[r.framework].add(r.control);
+      if (!seenFw.has(r.framework)) { seenFw.add(r.framework); compFindingsByFw[r.framework]++; }
+    }
+  }
+  const totalCompFindings = findings.filter(f => (COMPLIANCE_MAP[f.type] || []).length > 0).length;
+  const totalUniqueControls = COMP_FRAMEWORKS.reduce((s, fw) => s + compControlsByFw[fw].size, 0);
+
+  // ── Architecture topology ──────────────────────────────────────────────────
+  const ARCH_LAYERS = [
+    { id:'api',       label:'API',             color:'#2563EB', services:['API Gateway','CloudFront'] },
+    { id:'compute',   label:'Compute',          color:'#EA580C', services:['Lambda','Provisioned Concurrency','ECS','Azure Functions','App Service','Virtual Machines'] },
+    { id:'messaging', label:'Events & Queues',  color:'#9333EA', services:['EventBridge','SNS','SQS','MSK','Service Bus'] },
+    { id:'storage',   label:'Storage & Logs',   color:'#16A34A', services:['S3','Log Groups','Blob Storage','Log Analytics','Azure Monitor'] },
+    { id:'data',      label:'Data',             color:'#4A4A9F', services:['DynamoDB','Secrets Manager','Cosmos DB'] },
+    { id:'network',   label:'Networking',       color:'#64748B', services:['NAT Gateway'] },
+    { id:'security',  label:'Security',         color:'#DC2626', services:['Security Groups','IAM'] },
+  ];
+
+  const worstPriorityByService = {};
+  for (const f of findings) {
+    const cur = worstPriorityByService[f.service];
+    if (!cur || f.priority === 'HIGH' || (f.priority === 'MEDIUM' && cur === 'LOW')) {
+      worstPriorityByService[f.service] = f.priority;
+    }
+  }
+
+  const activeLayers = ARCH_LAYERS.filter(layer =>
+    layer.services.some(svc => byService[svc] !== undefined)
+  );
+
+  const archTopoHTML = activeLayers.length > 0 ? (() => {
+    const rows = activeLayers.map((layer, li) => {
+      const layerServices = layer.services.filter(svc => byService[svc] !== undefined);
+      const layerWorst = layerServices.reduce((worst, svc) => {
+        const p = worstPriorityByService[svc];
+        if (p === 'HIGH') return 'HIGH';
+        if (p === 'MEDIUM' && worst !== 'HIGH') return 'MEDIUM';
+        if (p === 'LOW' && !worst) return 'LOW';
+        return worst;
+      }, null);
+      const statusCls   = layerWorst || 'CLEAN';
+      const statusLabel = layerWorst || 'Clean';
+
+      const svcCards = layerServices.map(svc => {
+        const cnt   = byService[svc] || 0;
+        const worst = worstPriorityByService[svc] || 'CLEAN';
+        const bg    = serviceColors[svc] || '#64748b';
+        const lbl   = serviceIconLabel[svc] || svc[0];
+        return `<div class="arch-svc-card">
+          <div class="arch-svc-icon-sm" style="background:${bg}">${lbl}</div>
+          <div class="arch-svc-info">
+            <div class="arch-svc-name">${escapeHtml(svc)}</div>
+            <div class="arch-svc-finding">${cnt} finding${cnt !== 1 ? 's' : ''}</div>
+          </div>
+          <span class="arch-svc-health ${worst}">${worst === 'CLEAN' ? '✓' : worst}</span>
+        </div>`;
+      }).join('');
+
+      const arrow = li < activeLayers.length - 1
+        ? `<div class="arch-arrow">↓</div>`
+        : '';
+
+      return `<div class="arch-layer-row" style="--layer-color:${layer.color}">
+        <div class="arch-layer-header">
+          <div class="arch-layer-name">${escapeHtml(layer.label)}</div>
+          <div class="arch-layer-status ${statusCls}">${statusLabel}</div>
+        </div>
+        <div class="arch-layer-body">${svcCards}</div>
+      </div>${arrow}`;
+    });
+    return `<div class="section-heading">Architecture Health <span class="sh-sub">by service layer</span></div>
+    <div class="arch-topology">${rows.join('')}</div>`;
+  })() : '';
 
   // ── Narrative ──────────────────────────────────────────────────────────────
   const narrativeParts = [];
@@ -181,6 +374,8 @@ function generateReport({ findings, summary, provider, days }) {
       MSK_IDLE:'Idle Cluster', MSK_UNDERUTILIZED:'Low Utilisation', MSK_OFFLINE:'Offline Partitions',
       MSK_DURABILITY_RISK:'Durability Risk', MSK_DISK_CRITICAL:'Disk Critical',
       MISSING_TAGS:'Missing Tags', NO_RETENTION:'No Log Retention',
+      S3_PUBLIC_ACCESS:'Public Access', SG_OPEN_INGRESS:'Open to Internet',
+      IAM_KEY_STALE:'Stale Key', SECRET_NO_ROTATION:'No Rotation',
     };
     return labels[type] || type.replace(/_/g, ' ');
   }
@@ -219,6 +414,28 @@ function generateReport({ findings, summary, provider, days }) {
         <div class="explain-text">${escapeHtml(explainText)}</div>
       </div>` : '';
 
+    const compRules = COMPLIANCE_MAP[f.type] || [];
+    const compPillsHTML = compRules.length > 0
+      ? `<div class="comp-pills">${[...new Set(compRules.map(r => r.framework))].map(fw => {
+          const cls = fw === 'SOC 2' ? 'soc2' : fw === 'CIS AWS' ? 'cis' : 'iso';
+          const lbl = fw === 'ISO 27001' ? 'ISO' : fw;
+          return `<span class="comp-pill ${cls}">${escapeHtml(lbl)}</span>`;
+        }).join('')}</div>`
+      : '';
+    const compDetailHTML = compRules.length > 0 ? `
+      <div class="comp-detail-section">
+        <div class="explain-title">Compliance Controls</div>
+        ${compRules.map(r => {
+          const cls = r.framework === 'SOC 2' ? 'soc2' : r.framework === 'CIS AWS' ? 'cis' : 'iso';
+          const lbl = r.framework === 'ISO 27001' ? 'ISO' : r.framework;
+          return `<div class="comp-control-row">
+            <span class="comp-pill ${cls}">${escapeHtml(lbl)}</span>
+            <span class="comp-control-id">${escapeHtml(r.control)}</span>
+            <span class="comp-control-desc">${escapeHtml(r.desc)}</span>
+          </div>`;
+        }).join('')}
+      </div>` : '';
+
     return `
       <tr class="finding-row" id="frow-${idx}" onclick="toggleDetail(${idx})"
           data-priority="${f.priority}"
@@ -230,7 +447,7 @@ function generateReport({ findings, summary, provider, days }) {
         <td><span class="priority-dot dot-${f.priority}"></span><span class="badge badge-${f.priority}">${f.priority}</span></td>
         <td><span class="service-icon-sm" style="background:${bg}">${lbl}</span>${escapeHtml(f.service)}</td>
         <td>${envBadge}<span class="resource-name">${escapeHtml(f.resourceName)}</span></td>
-        <td><span class="badge badge-type badge-type-${f.type}">${typeLabel(f.type)}</span></td>
+        <td><span class="badge badge-type badge-type-${f.type}">${typeLabel(f.type)}</span>${compPillsHTML}</td>
         <td class="details-cell">${escapeHtml(f.details)}</td>
         <td class="savings-cell">${savingsHTML}</td>
         <td class="chevron-cell"><span class="chevron" id="chev-${idx}">▸</span></td>
@@ -244,6 +461,7 @@ function generateReport({ findings, summary, provider, days }) {
             </div>
             <div class="detail-section">
               ${explainBox}
+              ${compDetailHTML}
               <h4>Recommendation</h4>
               <div class="recommendation">${escapeHtml(f.recommendation || '')}</div>
               <div class="resource-arn">${escapeHtml(f.resourceId || '')}</div>
@@ -461,6 +679,80 @@ function generateReport({ findings, summary, provider, days }) {
     .no-findings { text-align: center; padding: 3rem; color: var(--muted); font-size: 0.9rem; }
 
     footer { text-align: center; padding: 1.25rem; color: var(--muted); font-size: 0.72rem; border-top: 1px solid var(--border); margin-top: 2rem; }
+
+    /* ── Architecture topology ── */
+    .arch-topology { margin-bottom: 1.75rem; }
+    .arch-layer-row { display: flex; align-items: stretch; }
+    .arch-layer-header { width: 116px; flex-shrink: 0; display: flex; flex-direction: column; justify-content: center; padding: 0.7rem 0.875rem; background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--layer-color, var(--blue)); border-right: none; border-radius: var(--radius) 0 0 var(--radius); }
+    .arch-layer-name { font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); }
+    .arch-layer-status { font-size: 0.68rem; font-weight: 700; margin-top: 0.2rem; }
+    .arch-layer-status.HIGH   { color: var(--high); }
+    .arch-layer-status.MEDIUM { color: var(--medium); }
+    .arch-layer-status.LOW    { color: var(--low); }
+    .arch-layer-status.CLEAN  { color: var(--green); }
+    .arch-layer-body { flex: 1; display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; padding: 0.6rem 1rem; background: var(--surface); border: 1px solid var(--border); border-left: none; border-radius: 0 var(--radius) var(--radius) 0; }
+    .arch-arrow { text-align: left; color: var(--border-2); font-size: 0.85rem; padding: 0.18rem 0 0.18rem 57px; line-height: 1; }
+    .arch-svc-card { display: flex; align-items: center; gap: 0.45rem; padding: 0.38rem 0.65rem; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; }
+    .arch-svc-icon-sm { width: 22px; height: 22px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 0.5rem; font-weight: 800; color: white; flex-shrink: 0; }
+    .arch-svc-info { min-width: 82px; }
+    .arch-svc-name    { font-size: 0.73rem; font-weight: 600; color: var(--text); }
+    .arch-svc-finding { font-size: 0.6rem; color: var(--muted); margin-top: 0.05rem; }
+    .arch-svc-health  { font-size: 0.58rem; font-weight: 700; padding: 0.12rem 0.38rem; border-radius: 3px; white-space: nowrap; flex-shrink: 0; }
+    .arch-svc-health.HIGH   { background: #FEE2E2; color: #B91C1C; }
+    .arch-svc-health.MEDIUM { background: #FFEDD5; color: #C2410C; }
+    .arch-svc-health.LOW    { background: #FEF9C3; color: #A16207; }
+    .arch-svc-health.CLEAN  { background: #F0FDF4; color: #15803D; }
+
+    /* ── Compliance ── */
+    .compliance-bar { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.5rem; margin-bottom: 1.75rem; display: flex; align-items: center; gap: 2rem; box-shadow: var(--shadow); }
+    .compliance-bar-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); min-width: 110px; }
+    .compliance-bar-label span { display: block; font-size: 1.05rem; font-weight: 800; color: var(--text); text-transform: none; letter-spacing: 0; margin-top: 0.15rem; }
+    .compliance-bar-label em { font-style: normal; font-size: 0.72rem; font-weight: 400; color: var(--muted); }
+    .compliance-fw-tiles { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+    .compliance-fw-tile { border-radius: var(--radius); padding: 0.65rem 1.1rem; text-align: center; min-width: 110px; }
+    .compliance-fw-tile.soc2 { background: #F0FDF4; border: 1px solid #86EFAC; }
+    .compliance-fw-tile.cis  { background: #EFF6FF; border: 1px solid #93C5FD; }
+    .compliance-fw-tile.iso  { background: #F5F3FF; border: 1px solid #C4B5FD; }
+    .fw-tile-name     { font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-2); }
+    .fw-tile-controls { font-size: 1.3rem; font-weight: 800; line-height: 1.1; margin: 0.2rem 0 0.1rem; }
+    .compliance-fw-tile.soc2 .fw-tile-controls { color: #15803D; }
+    .compliance-fw-tile.cis  .fw-tile-controls { color: #1D4ED8; }
+    .compliance-fw-tile.iso  .fw-tile-controls { color: #6D28D9; }
+    .fw-tile-findings { font-size: 0.62rem; color: var(--muted); }
+    .comp-pill { display: inline-block; padding: 0.1rem 0.38rem; border-radius: 3px; font-size: 0.56rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; white-space: nowrap; }
+    .comp-pill.soc2 { background: #F0FDF4; color: #15803D; border: 1px solid #86EFAC; }
+    .comp-pill.cis  { background: #EFF6FF; color: #1D4ED8; border: 1px solid #93C5FD; }
+    .comp-pill.iso  { background: #F5F3FF; color: #6D28D9; border: 1px solid #C4B5FD; }
+    .comp-pills { margin-top: 0.3rem; display: flex; gap: 0.2rem; flex-wrap: wrap; }
+    .comp-detail-section { background: #FAFAFA; border: 1px solid var(--border); border-radius: 6px; padding: 0.65rem 0.875rem; margin-bottom: 0.75rem; }
+    .comp-detail-section .explain-title { color: #4B5563; }
+    .comp-control-row { display: flex; align-items: flex-start; gap: 0.5rem; padding: 0.3rem 0; border-bottom: 1px solid var(--border); font-size: 0.78rem; }
+    .comp-control-row:last-child { border-bottom: none; }
+    .comp-control-id   { font-family: 'SF Mono',Consolas,monospace; font-size: 0.7rem; font-weight: 700; color: var(--text-2); flex-shrink: 0; margin-top: 1px; }
+    .comp-control-desc { color: var(--muted); line-height: 1.45; }
+
+    /* ── Print / PDF ── */
+    @media print {
+      * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      @page { margin: 1.5cm; size: A4 landscape; }
+      body { background: white; font-size: 12px; }
+      .header { box-shadow: none; -webkit-print-color-adjust: exact; }
+      .toolbar, .type-tabs, .type-desc-bar, .chevron-cell, .results-count { display: none !important; }
+      .filter-group, .search-wrap, .action-btn { display: none !important; }
+      .summary-bar { box-shadow: none; page-break-inside: avoid; }
+      .sum-item.high, .sum-item.medium, .sum-item.low { border-top-width: 3px; }
+      .service-tile, .chart-card { box-shadow: none; }
+      .findings-header { border-bottom: 1px solid #E2E8F0; border-radius: 8px 8px 0 0; }
+      .table-wrap { box-shadow: none; border-top: 1px solid #E2E8F0; }
+      tbody tr.finding-row { page-break-inside: avoid; }
+      tbody tr.detail-row { display: none !important; }
+      .narrative-bar { page-break-inside: avoid; }
+      .services-row { page-break-inside: avoid; }
+      footer { page-break-before: avoid; }
+      .badge-HIGH   { background: #FEE2E2 !important; color: #B91C1C !important; }
+      .badge-MEDIUM { background: #FFEDD5 !important; color: #C2410C !important; }
+      .badge-LOW    { background: #FEF9C3 !important; color: #A16207 !important; }
+    }
   </style>
 </head>
 <body>
@@ -481,16 +773,39 @@ function generateReport({ findings, summary, provider, days }) {
 
   <!-- Summary numbers -->
   <div class="summary-bar">
-    <div class="sum-item"><div class="sum-val">${scanned.toLocaleString()}</div><div class="sum-lbl">Resources Scanned</div></div>
-    <div class="sum-item"><div class="sum-val">${findings.length}</div><div class="sum-lbl">Total Findings</div></div>
-    <div class="sum-item high"><div class="sum-val">${highCount}</div><div class="sum-lbl">High</div></div>
-    <div class="sum-item medium"><div class="sum-val">${mediumCount}</div><div class="sum-lbl">Medium</div></div>
-    <div class="sum-item low"><div class="sum-val">${lowCount}</div><div class="sum-lbl">Low</div></div>
-    ${totalSavings > 0 ? `<div class="sum-item savings"><div class="sum-val">$${totalSavings.toFixed(0)}/mo</div><div class="sum-lbl">Recoverable</div></div>` : ''}
-    ${totalSpend   > 0 ? `<div class="sum-item spend"><div class="sum-val">$${totalSpend.toFixed(0)}/mo</div><div class="sum-lbl">Est. Spend</div></div>` : ''}
+    <div class="sum-item"><div class="sum-val" data-count="${scanned}">${scanned.toLocaleString()}</div><div class="sum-lbl">Resources Scanned</div></div>
+    <div class="sum-item"><div class="sum-val" data-count="${findings.length}">${findings.length}</div><div class="sum-lbl">Total Findings</div></div>
+    <div class="sum-item high"><div class="sum-val" data-count="${highCount}">${highCount}</div><div class="sum-lbl">High</div></div>
+    <div class="sum-item medium"><div class="sum-val" data-count="${mediumCount}">${mediumCount}</div><div class="sum-lbl">Medium</div></div>
+    <div class="sum-item low"><div class="sum-val" data-count="${lowCount}">${lowCount}</div><div class="sum-lbl">Low</div></div>
+    ${totalSavings > 0 ? `<div class="sum-item savings"><div class="sum-val" data-count="${totalSavings.toFixed(0)}" data-prefix="$" data-suffix="/mo">$${totalSavings.toFixed(0)}/mo</div><div class="sum-lbl">Recoverable</div></div>` : ''}
+    ${totalSpend   > 0 ? `<div class="sum-item spend"><div class="sum-val" data-count="${totalSpend.toFixed(0)}" data-prefix="$" data-suffix="/mo">$${totalSpend.toFixed(0)}/mo</div><div class="sum-lbl">Est. Spend</div></div>` : ''}
   </div>
 
   ${narrativeHTML}
+
+  <!-- Compliance impact bar -->
+  ${totalCompFindings > 0 ? `
+  <div class="compliance-bar">
+    <div class="compliance-bar-label">
+      Compliance Impact
+      <span>${totalUniqueControls} controls</span>
+      <em>${totalCompFindings} of ${findings.length} findings map to a framework</em>
+    </div>
+    <div class="compliance-fw-tiles">
+      ${COMP_FRAMEWORKS.filter(fw => compFindingsByFw[fw] > 0).map(fw => {
+        const cls  = fw === 'SOC 2' ? 'soc2' : fw === 'CIS AWS' ? 'cis' : 'iso';
+        return `<div class="compliance-fw-tile ${cls}">
+          <div class="fw-tile-name">${escapeHtml(fw)}</div>
+          <div class="fw-tile-controls">${compControlsByFw[fw].size}</div>
+          <div class="fw-tile-findings">${compFindingsByFw[fw]} finding${compFindingsByFw[fw] !== 1 ? 's' : ''}</div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>` : ''}
+
+  <!-- Architecture topology -->
+  ${archTopoHTML}
 
   <!-- Service breakdown -->
   ${Object.keys(byService).length > 0 ? `
@@ -530,6 +845,7 @@ function generateReport({ findings, summary, provider, days }) {
     <span class="results-count" id="results-count">Showing <strong>${findings.length}</strong> of <strong>${findings.length}</strong></span>
     <button class="action-btn"       onclick="exportCSV()">↓ CSV</button>
     <button class="action-btn green" onclick="downloadFixScript()">↓ Fix Script</button>
+    <button class="action-btn"       onclick="window.print()">⎙ Print / PDF</button>
   </div>
 
   <div class="table-wrap">
@@ -731,6 +1047,28 @@ function generateReport({ findings, summary, provider, days }) {
     var a    = document.createElement('a'); a.href = url; a.download = 'cloudlens-remediate.sh'; a.click();
     URL.revokeObjectURL(url);
   }
+
+  // ── Animated counters ─────────────────────────────────────────────────────
+  (function() {
+    var els = document.querySelectorAll('.sum-val[data-count]');
+    els.forEach(function(el) {
+      var target   = parseFloat(el.dataset.count) || 0;
+      var prefix   = el.dataset.prefix || '';
+      var suffix   = el.dataset.suffix || '';
+      var duration = 900;
+      var startTime = null;
+      function step(ts) {
+        if (!startTime) startTime = ts;
+        var progress = Math.min((ts - startTime) / duration, 1);
+        var eased    = 1 - Math.pow(1 - progress, 3);
+        var current  = Math.round(eased * target);
+        el.textContent = prefix + current.toLocaleString() + suffix;
+        if (progress < 1) requestAnimationFrame(step);
+        else el.textContent = prefix + target.toLocaleString() + suffix;
+      }
+      requestAnimationFrame(step);
+    });
+  })();
 
   // ── CSV export ────────────────────────────────────────────────────────────
   function exportCSV() {

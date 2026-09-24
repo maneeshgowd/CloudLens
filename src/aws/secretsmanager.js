@@ -1,6 +1,6 @@
 'use strict';
 
-const { SecretsManagerClient, ListSecretsCommand } = require('@aws-sdk/client-secrets-manager');
+const { SecretsManagerClient, ListSecretsCommand, DescribeSecretCommand } = require('@aws-sdk/client-secrets-manager');
 
 const COST_PER_SECRET_MONTH = 0.40; // $0.40/secret/month regardless of usage
 const STALE_THRESHOLD_DAYS  = 30;   // not accessed in 30+ days = stale
@@ -53,6 +53,27 @@ async function analyzeSecretsManager({ region, startTime, endTime, days, filter 
         monthlyCostUsd:      COST_PER_SECRET_MONTH,
       },
     };
+
+    // ── Rotation check ──────────────────────────────────────────────────────
+    const rotationEnabled = secret.RotationEnabled === true;
+    if (!rotationEnabled && daysSinceAccess !== null && daysSinceAccess <= 30) {
+      // Recently accessed but no rotation — active credential that never rotates
+      findings.push({
+        ...base,
+        priority:       'HIGH',
+        type:           'SECRET_NO_ROTATION',
+        details:        `Secret was accessed ${daysSinceAccess} days ago but has rotation disabled — this credential never automatically rotates`,
+        recommendation: `Enable automatic rotation for this secret. Static credentials that never rotate are a critical security risk — a leaked key remains valid indefinitely. Supported secret types can use AWS-managed rotation via Lambda.`,
+      });
+    } else if (!rotationEnabled && daysSinceAccess !== null && daysSinceAccess <= 90) {
+      findings.push({
+        ...base,
+        priority:       'MEDIUM',
+        type:           'SECRET_NO_ROTATION',
+        details:        `Secret accessed ${daysSinceAccess} days ago with rotation disabled — credential is static and never rotated`,
+        recommendation: `Enable automatic rotation for this secret to reduce the risk of credential compromise.`,
+      });
+    }
 
     if (daysSinceAccess === null) {
       findings.push({

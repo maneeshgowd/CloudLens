@@ -13,6 +13,8 @@ const { analyzeAPIGateway }           = require('./apigateway');
 const { analyzeSecretsManager }       = require('./secretsmanager');
 const { analyzeCloudFront }           = require('./cloudfront');
 const { analyzeMSK }                  = require('./msk');
+const { analyzeSecurityGroups }       = require('./securitygroups');
+const { analyzeIAM }                  = require('./iam');
 const { computeCostContext }          = require('./localcosts');
 
 // Maps user-supplied aliases → canonical service name (lowercase)
@@ -45,6 +47,10 @@ const SERVICE_ALIASES = {
   msk:                  'msk',
   kafka:                'msk',
   'managed-kafka':      'msk',
+  iam:                  'iam',
+  sg:                   'security groups',
+  'security-groups':    'security groups',
+  securitygroups:       'security groups',
 };
 
 async function analyzeAWS({ days, region, filter, exclude = [] }) {
@@ -70,6 +76,8 @@ async function analyzeAWS({ days, region, filter, exclude = [] }) {
     { name: 'Secrets Manager',          fn: analyzeSecretsManager         },
     { name: 'CloudFront',               fn: analyzeCloudFront             },
     { name: 'MSK',                      fn: analyzeMSK                    },
+    { name: 'Security Groups',          fn: analyzeSecurityGroups         },
+    { name: 'IAM',                      fn: analyzeIAM                    },
   ].filter(({ name }) => !excluded.has(name.toLowerCase()));
 
   const findings = [];

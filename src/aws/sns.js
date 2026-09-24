@@ -61,7 +61,7 @@ async function analyzeSNS({ region, startTime, endTime, days, filter }) {
     console.log(`${totalFound} found${filter ? ` matching "${filter}"` : ''}`);
   }
 
-  if (topics.length === 0) return { findings: [], resourcesScanned: totalFound };
+  if (topics.length === 0) return { findings: [], resourcesScanned: 0 };
 
   const topicMeta = topics.map(t => ({
     arn:  t.TopicArn,
@@ -137,7 +137,7 @@ async function analyzeSNS({ region, startTime, endTime, days, filter }) {
     });
   });
 
-  return { findings, resourcesScanned: totalFound };
+  return { findings, resourcesScanned: topics.length };
 }
 
 module.exports = { analyzeSNS };
