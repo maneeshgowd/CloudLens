@@ -248,73 +248,6 @@ function generateReport({ findings, summary, provider, days }) {
   const totalCompFindings = findings.filter(f => (COMPLIANCE_MAP[f.type] || []).length > 0).length;
   const totalUniqueControls = COMP_FRAMEWORKS.reduce((s, fw) => s + compControlsByFw[fw].size, 0);
 
-  // ── Architecture topology ──────────────────────────────────────────────────
-  const ARCH_LAYERS = [
-    { id:'api',       label:'API',             color:'#2563EB', services:['API Gateway','CloudFront'] },
-    { id:'compute',   label:'Compute',          color:'#EA580C', services:['Lambda','Provisioned Concurrency','ECS','Azure Functions','App Service','Virtual Machines'] },
-    { id:'messaging', label:'Events & Queues',  color:'#9333EA', services:['EventBridge','SNS','SQS','MSK','Service Bus'] },
-    { id:'storage',   label:'Storage & Logs',   color:'#16A34A', services:['S3','Log Groups','Blob Storage','Log Analytics','Azure Monitor'] },
-    { id:'data',      label:'Data',             color:'#4A4A9F', services:['DynamoDB','Secrets Manager','Cosmos DB'] },
-    { id:'network',   label:'Networking',       color:'#64748B', services:['NAT Gateway'] },
-    { id:'security',  label:'Security',         color:'#DC2626', services:['Security Groups','IAM'] },
-  ];
-
-  const worstPriorityByService = {};
-  for (const f of findings) {
-    const cur = worstPriorityByService[f.service];
-    if (!cur || f.priority === 'HIGH' || (f.priority === 'MEDIUM' && cur === 'LOW')) {
-      worstPriorityByService[f.service] = f.priority;
-    }
-  }
-
-  const activeLayers = ARCH_LAYERS.filter(layer =>
-    layer.services.some(svc => byService[svc] !== undefined)
-  );
-
-  const archTopoHTML = activeLayers.length > 0 ? (() => {
-    const rows = activeLayers.map((layer, li) => {
-      const layerServices = layer.services.filter(svc => byService[svc] !== undefined);
-      const layerWorst = layerServices.reduce((worst, svc) => {
-        const p = worstPriorityByService[svc];
-        if (p === 'HIGH') return 'HIGH';
-        if (p === 'MEDIUM' && worst !== 'HIGH') return 'MEDIUM';
-        if (p === 'LOW' && !worst) return 'LOW';
-        return worst;
-      }, null);
-      const statusCls   = layerWorst || 'CLEAN';
-      const statusLabel = layerWorst || 'Clean';
-
-      const svcCards = layerServices.map(svc => {
-        const cnt   = byService[svc] || 0;
-        const worst = worstPriorityByService[svc] || 'CLEAN';
-        const bg    = serviceColors[svc] || '#64748b';
-        const lbl   = serviceIconLabel[svc] || svc[0];
-        return `<div class="arch-svc-card">
-          <div class="arch-svc-icon-sm" style="background:${bg}">${lbl}</div>
-          <div class="arch-svc-info">
-            <div class="arch-svc-name">${escapeHtml(svc)}</div>
-            <div class="arch-svc-finding">${cnt} finding${cnt !== 1 ? 's' : ''}</div>
-          </div>
-          <span class="arch-svc-health ${worst}">${worst === 'CLEAN' ? '✓' : worst}</span>
-        </div>`;
-      }).join('');
-
-      const arrow = li < activeLayers.length - 1
-        ? `<div class="arch-arrow">↓</div>`
-        : '';
-
-      return `<div class="arch-layer-row" style="--layer-color:${layer.color}">
-        <div class="arch-layer-header">
-          <div class="arch-layer-name">${escapeHtml(layer.label)}</div>
-          <div class="arch-layer-status ${statusCls}">${statusLabel}</div>
-        </div>
-        <div class="arch-layer-body">${svcCards}</div>
-      </div>${arrow}`;
-    });
-    return `<div class="section-heading">Architecture Health <span class="sh-sub">by service layer</span></div>
-    <div class="arch-topology">${rows.join('')}</div>`;
-  })() : '';
-
   // ── Narrative ──────────────────────────────────────────────────────────────
   const narrativeParts = [];
   if (deprecatedCount > 0) {
@@ -391,9 +324,6 @@ function generateReport({ findings, summary, provider, days }) {
     const savingsHTML = s > 0
       ? `<span class="savings-badge">${s < 0.01 ? '< $0.01' : '~$' + s.toFixed(2)}/mo</span>`
       : '<span class="savings-nil">—</span>';
-    const envBadge = f.environment
-      ? `<span class="env-badge env-${f.environment}">${f.environment}</span>`
-      : '';
     const fixSection = f.fixCommand ? `
       <div class="fix-section">
         <h4>Fix Command</h4>
@@ -415,13 +345,6 @@ function generateReport({ findings, summary, provider, days }) {
       </div>` : '';
 
     const compRules = COMPLIANCE_MAP[f.type] || [];
-    const compPillsHTML = compRules.length > 0
-      ? `<div class="comp-pills">${[...new Set(compRules.map(r => r.framework))].map(fw => {
-          const cls = fw === 'SOC 2' ? 'soc2' : fw === 'CIS AWS' ? 'cis' : 'iso';
-          const lbl = fw === 'ISO 27001' ? 'ISO' : fw;
-          return `<span class="comp-pill ${cls}">${escapeHtml(lbl)}</span>`;
-        }).join('')}</div>`
-      : '';
     const compDetailHTML = compRules.length > 0 ? `
       <div class="comp-detail-section">
         <div class="explain-title">Compliance Controls</div>
@@ -446,8 +369,8 @@ function generateReport({ findings, summary, provider, days }) {
           data-typegroup="${typeG}">
         <td><span class="priority-dot dot-${f.priority}"></span><span class="badge badge-${f.priority}">${f.priority}</span></td>
         <td><span class="service-icon-sm" style="background:${bg}">${lbl}</span>${escapeHtml(f.service)}</td>
-        <td>${envBadge}<span class="resource-name">${escapeHtml(f.resourceName)}</span></td>
-        <td><span class="badge badge-type badge-type-${f.type}">${typeLabel(f.type)}</span>${compPillsHTML}</td>
+        <td><span class="resource-name">${escapeHtml(f.resourceName)}</span></td>
+        <td><span class="badge badge-type badge-type-${f.type}">${typeLabel(f.type)}</span></td>
         <td class="details-cell">${escapeHtml(f.details)}</td>
         <td class="savings-cell">${savingsHTML}</td>
         <td class="chevron-cell"><span class="chevron" id="chev-${idx}">▸</span></td>
@@ -680,29 +603,6 @@ function generateReport({ findings, summary, provider, days }) {
 
     footer { text-align: center; padding: 1.25rem; color: var(--muted); font-size: 0.72rem; border-top: 1px solid var(--border); margin-top: 2rem; }
 
-    /* ── Architecture topology ── */
-    .arch-topology { margin-bottom: 1.75rem; }
-    .arch-layer-row { display: flex; align-items: stretch; }
-    .arch-layer-header { width: 116px; flex-shrink: 0; display: flex; flex-direction: column; justify-content: center; padding: 0.7rem 0.875rem; background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--layer-color, var(--blue)); border-right: none; border-radius: var(--radius) 0 0 var(--radius); }
-    .arch-layer-name { font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); }
-    .arch-layer-status { font-size: 0.68rem; font-weight: 700; margin-top: 0.2rem; }
-    .arch-layer-status.HIGH   { color: var(--high); }
-    .arch-layer-status.MEDIUM { color: var(--medium); }
-    .arch-layer-status.LOW    { color: var(--low); }
-    .arch-layer-status.CLEAN  { color: var(--green); }
-    .arch-layer-body { flex: 1; display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; padding: 0.6rem 1rem; background: var(--surface); border: 1px solid var(--border); border-left: none; border-radius: 0 var(--radius) var(--radius) 0; }
-    .arch-arrow { text-align: left; color: var(--border-2); font-size: 0.85rem; padding: 0.18rem 0 0.18rem 57px; line-height: 1; }
-    .arch-svc-card { display: flex; align-items: center; gap: 0.45rem; padding: 0.38rem 0.65rem; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; }
-    .arch-svc-icon-sm { width: 22px; height: 22px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 0.5rem; font-weight: 800; color: white; flex-shrink: 0; }
-    .arch-svc-info { min-width: 82px; }
-    .arch-svc-name    { font-size: 0.73rem; font-weight: 600; color: var(--text); }
-    .arch-svc-finding { font-size: 0.6rem; color: var(--muted); margin-top: 0.05rem; }
-    .arch-svc-health  { font-size: 0.58rem; font-weight: 700; padding: 0.12rem 0.38rem; border-radius: 3px; white-space: nowrap; flex-shrink: 0; }
-    .arch-svc-health.HIGH   { background: #FEE2E2; color: #B91C1C; }
-    .arch-svc-health.MEDIUM { background: #FFEDD5; color: #C2410C; }
-    .arch-svc-health.LOW    { background: #FEF9C3; color: #A16207; }
-    .arch-svc-health.CLEAN  { background: #F0FDF4; color: #15803D; }
-
     /* ── Compliance ── */
     .compliance-bar { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.5rem; margin-bottom: 1.75rem; display: flex; align-items: center; gap: 2rem; box-shadow: var(--shadow); }
     .compliance-bar-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); min-width: 110px; }
@@ -804,9 +704,6 @@ function generateReport({ findings, summary, provider, days }) {
     </div>
   </div>` : ''}
 
-  <!-- Architecture topology -->
-  ${archTopoHTML}
-
   <!-- Service breakdown -->
   ${Object.keys(byService).length > 0 ? `
   <div class="section-heading">Findings by Service <span class="sh-sub">${serviceCount} service${serviceCount !== 1 ? 's' : ''} affected</span></div>
@@ -834,13 +731,6 @@ function generateReport({ findings, summary, provider, days }) {
       <button class="filter-btn priority-btn high"   data-filter="HIGH"   onclick="setPriorityFilter('HIGH',this)">High (${highCount})</button>
       <button class="filter-btn priority-btn medium" data-filter="MEDIUM" onclick="setPriorityFilter('MEDIUM',this)">Med (${mediumCount})</button>
       <button class="filter-btn priority-btn low"    data-filter="LOW"    onclick="setPriorityFilter('LOW',this)">Low (${lowCount})</button>
-    </div>
-    <div class="filter-group">
-      <span class="filter-label">Env:</span>
-      <button class="filter-btn env-btn active"   data-filter="ALL"  onclick="setEnvFilter('ALL',this)">All</button>
-      <button class="filter-btn env-btn env-prod" data-filter="prod" onclick="setEnvFilter('prod',this)">Prod</button>
-      <button class="filter-btn env-btn env-tst"  data-filter="tst"  onclick="setEnvFilter('tst',this)">Test</button>
-      <button class="filter-btn env-btn env-dev"  data-filter="dev"  onclick="setEnvFilter('dev',this)">Dev</button>
     </div>
     <span class="results-count" id="results-count">Showing <strong>${findings.length}</strong> of <strong>${findings.length}</strong></span>
     <button class="action-btn"       onclick="exportCSV()">↓ CSV</button>
@@ -888,7 +778,6 @@ function generateReport({ findings, summary, provider, days }) {
   })))};
 
   var activeFilter     = 'ALL';
-  var activeEnvFilter  = 'ALL';
   var activeTypeFilter = 'ALL';
   var activeSearch     = '';
 
@@ -944,15 +833,8 @@ function generateReport({ findings, summary, provider, days }) {
     renderVisibility();
   }
 
-  function setEnvFilter(env, btn) {
-    document.querySelectorAll('.env-btn').forEach(function(b) { b.classList.remove('active'); });
-    btn.classList.add('active');
-    activeEnvFilter = env;
-    renderVisibility();
-  }
-
   function resetFilters() {
-    activeFilter = 'ALL'; activeEnvFilter = 'ALL'; activeTypeFilter = 'ALL'; activeSearch = '';
+    activeFilter = 'ALL'; activeTypeFilter = 'ALL'; activeSearch = '';
     document.getElementById('search-input').value = '';
     document.querySelectorAll('.type-tab').forEach(function(b) { b.classList.remove('active'); });
     var allTab = document.querySelector('.type-tab[data-type="ALL"]');
@@ -962,9 +844,6 @@ function generateReport({ findings, summary, provider, days }) {
     document.querySelectorAll('.priority-btn').forEach(function(b) { b.classList.remove('active'); });
     var allPri = document.querySelector('.priority-btn[data-filter="ALL"]');
     if (allPri) allPri.classList.add('active');
-    document.querySelectorAll('.env-btn').forEach(function(b) { b.classList.remove('active'); });
-    var allEnv = document.querySelector('.env-btn[data-filter="ALL"]');
-    if (allEnv) allEnv.classList.add('active');
     renderVisibility();
   }
 
@@ -976,10 +855,9 @@ function generateReport({ findings, summary, provider, days }) {
       var drow = document.getElementById('detail-' + f.idx);
       var chev = document.getElementById('chev-'   + f.idx);
       var matchPriority = activeFilter     === 'ALL' || activeFilter     === f.priority;
-      var matchEnv      = activeEnvFilter  === 'ALL' || activeEnvFilter  === f.environment;
       var matchSearch   = !activeSearch            || f.resourceName.toLowerCase().includes(activeSearch);
       var matchType     = activeTypeFilter === 'ALL' || activeTypeFilter === f.typegroup;
-      var visible = matchPriority && matchEnv && matchSearch && matchType;
+      var visible = matchPriority && matchSearch && matchType;
       if (visible) visibleCount++;
       if (frow) frow.classList.toggle('filtered', !visible);
       if (drow) { drow.classList.toggle('filtered', !visible); drow.classList.remove('open'); }
