@@ -5,7 +5,7 @@ const { MonitorClient } = require('@azure/arm-monitor');
 const { batchGetResourceMetrics } = require('./monitor');
 const { thresholds, azureManagedPrefixes } = require('../config');
 const { cosmosMonthlyCost } = require('./localcosts');
-const { detectEnvironment, detectTeam, missingTagGroups, resourceGroupFromId } = require('./tagging');
+const { detectEnvironment, detectTeam, missingTagGroups, resourceGroupFromId, matchesLocation } = require('./tagging');
 
 async function listAll(iterable) {
   const items = [];
@@ -13,18 +13,19 @@ async function listAll(iterable) {
   return items;
 }
 
-async function analyzeCosmosDB({ credential, subscriptionId, location, startTime, endTime, days, filter }) {
+async function analyzeCosmosDB({ credential, subscriptionId, startTime, endTime, days, filter, location }) {
   const cosmosClient = new CosmosDBManagementClient(credential, subscriptionId);
   const monitorClient = new MonitorClient(credential, subscriptionId);
 
   process.stdout.write('  Cosmos DB: listing accounts... ');
   const allAccounts = await listAll(cosmosClient.databaseAccounts.list());
-  let accounts = allAccounts.filter(a => (a.location || '').toLowerCase() === location.toLowerCase());
+  let accounts = allAccounts;
   if (filter) {
     const needle = filter.toLowerCase();
     accounts = accounts.filter(a => a.name.toLowerCase().includes(needle));
   }
   accounts = accounts.filter(a => !azureManagedPrefixes.some(p => a.name.toLowerCase().startsWith(p)));
+  accounts = accounts.filter(a => matchesLocation(a.location, location));
   console.log(`${accounts.length} found${filter ? ` matching "${filter}"` : ''}`);
 
   if (accounts.length === 0) return { findings: [], resourcesScanned: 0 };

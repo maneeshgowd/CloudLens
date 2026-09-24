@@ -54,4 +54,15 @@ function resourceGroupFromId(resourceId) {
   return match ? match[1] : null;
 }
 
-module.exports = { detectEnvironment, detectTeam, missingTagGroups, adjustIdlePriority, resourceGroupFromId };
+// True if a resource's location matches the configured scan target, so analysers can
+// skip resources outside AZURE_LOCATION. Global-scoped resources (e.g. classic CDN
+// profiles) aren't tied to any region and always match.
+function matchesLocation(resourceLocation, targetLocation) {
+  if (!targetLocation) return true;
+  const norm = (loc) => (loc || '').toLowerCase().replace(/\s+/g, '');
+  const rl = norm(resourceLocation);
+  if (!rl || rl === 'global') return true;
+  return rl === norm(targetLocation);
+}
+
+module.exports = { detectEnvironment, detectTeam, missingTagGroups, adjustIdlePriority, resourceGroupFromId, matchesLocation };

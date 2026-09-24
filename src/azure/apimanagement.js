@@ -5,7 +5,7 @@ const { MonitorClient } = require('@azure/arm-monitor');
 const { batchGetResourceMetrics } = require('./monitor');
 const { thresholds, azureManagedPrefixes } = require('../config');
 const { apiManagementMonthlyCost } = require('./localcosts');
-const { detectEnvironment, detectTeam, missingTagGroups, resourceGroupFromId } = require('./tagging');
+const { detectEnvironment, detectTeam, missingTagGroups, resourceGroupFromId, matchesLocation } = require('./tagging');
 
 async function listAll(iterable) {
   const items = [];
@@ -13,18 +13,19 @@ async function listAll(iterable) {
   return items;
 }
 
-async function analyzeApiManagement({ credential, subscriptionId, location, startTime, endTime, days, filter }) {
+async function analyzeApiManagement({ credential, subscriptionId, startTime, endTime, days, filter, location }) {
   const apimClient = new ApiManagementClient(credential, subscriptionId);
   const monitorClient = new MonitorClient(credential, subscriptionId);
 
   process.stdout.write('  API Management: listing services... ');
   const allServices = await listAll(apimClient.apiManagementService.list());
-  let services = allServices.filter(s => (s.location || '').toLowerCase() === location.toLowerCase());
+  let services = allServices;
   if (filter) {
     const needle = filter.toLowerCase();
     services = services.filter(s => s.name.toLowerCase().includes(needle));
   }
   services = services.filter(s => !azureManagedPrefixes.some(p => s.name.toLowerCase().startsWith(p)));
+  services = services.filter(s => matchesLocation(s.location, location));
   console.log(`${services.length} found${filter ? ` matching "${filter}"` : ''}`);
 
   if (services.length === 0) return { findings: [], resourcesScanned: 0 };

@@ -86,6 +86,21 @@ const PRICING = {
     perVCpuHour: 0.000024 * 3600, // active usage charge, vCPU-second billing normalised to hourly
     perGBHour: 0.000003 * 3600,   // memory GiB-second billing normalised to hourly
   },
+  sqlDatabase: {
+    // DTU-based (Basic/Standard/Premium) single databases — flat monthly rate by SKU name.
+    dtuMonthly: {
+      Basic: 4.90,
+      S0: 15, S1: 30, S2: 75, S3: 150, S4: 300, S6: 600, S7: 1200, S9: 2400, S12: 4800,
+      P1: 465, P2: 930, P4: 1860, P6: 3720, P11: 7000, P15: 9509,
+    },
+    // vCore-based purchasing model — hourly rate per vCore, by service tier.
+    vCoreHourly: {
+      GeneralPurpose: 0.196,
+      BusinessCritical: 0.507,
+      Hyperscale: 0.244,
+    },
+    fallbackMonthly: 15,
+  },
 };
 
 function vmMonthlyCost(vmSize) {
@@ -153,6 +168,24 @@ function containerAppsMonthlyCost(vCpu, memoryGB) {
   return (vCpu * PRICING.containerApps.perVCpuHour + memoryGB * PRICING.containerApps.perGBHour) * 24 * 30;
 }
 
+// database: the Database resource from @azure/arm-sql (needs sku.name, sku.tier, sku.capacity, elasticPoolId).
+// Elastic-pool members are billed as part of the pool, not per-database, so they cost 0 here to avoid double counting.
+function sqlDatabaseMonthlyCost(database) {
+  if (database.elasticPoolId) return 0;
+
+  const sku = database.sku || {};
+  if (sku.name && PRICING.sqlDatabase.dtuMonthly[sku.name] != null) {
+    return PRICING.sqlDatabase.dtuMonthly[sku.name];
+  }
+
+  const vCoreRate = PRICING.sqlDatabase.vCoreHourly[sku.tier];
+  if (vCoreRate && sku.capacity) {
+    return vCoreRate * sku.capacity * 24 * 30;
+  }
+
+  return PRICING.sqlDatabase.fallbackMonthly;
+}
+
 // Same shape/logic as src/aws/localcosts.js's computeCostContext, kept as a
 // separate instance since Azure spend is summed independently of AWS.
 function computeCostContext(findings, spendByService = {}) {
@@ -188,5 +221,6 @@ module.exports = {
   cdnMonthlyCost,
   eventHubsMonthlyCost,
   containerAppsMonthlyCost,
+  sqlDatabaseMonthlyCost,
   computeCostContext,
 };

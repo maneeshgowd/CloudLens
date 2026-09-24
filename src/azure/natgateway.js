@@ -5,7 +5,7 @@ const { MonitorClient } = require('@azure/arm-monitor');
 const { batchGetResourceMetrics } = require('./monitor');
 const { thresholds, azureManagedPrefixes } = require('../config');
 const { natGatewayMonthlyCost } = require('./localcosts');
-const { detectEnvironment, detectTeam, missingTagGroups, resourceGroupFromId } = require('./tagging');
+const { detectEnvironment, detectTeam, missingTagGroups, resourceGroupFromId, matchesLocation } = require('./tagging');
 
 async function listAll(iterable) {
   const items = [];
@@ -13,18 +13,19 @@ async function listAll(iterable) {
   return items;
 }
 
-async function analyzeNatGateway({ credential, subscriptionId, location, startTime, endTime, days, filter }) {
+async function analyzeNatGateway({ credential, subscriptionId, startTime, endTime, days, filter, location }) {
   const networkClient = new NetworkManagementClient(credential, subscriptionId);
   const monitorClient = new MonitorClient(credential, subscriptionId);
 
   process.stdout.write('  NAT Gateway: listing gateways... ');
   const allGateways = await listAll(networkClient.natGateways.listAll());
-  let gateways = allGateways.filter(g => (g.location || '').toLowerCase() === location.toLowerCase());
+  let gateways = allGateways;
   if (filter) {
     const needle = filter.toLowerCase();
     gateways = gateways.filter(g => g.name.toLowerCase().includes(needle));
   }
   gateways = gateways.filter(g => !azureManagedPrefixes.some(p => g.name.toLowerCase().startsWith(p)));
+  gateways = gateways.filter(g => matchesLocation(g.location, location));
   console.log(`${gateways.length} found${filter ? ` matching "${filter}"` : ''}`);
 
   if (gateways.length === 0) return { findings: [], resourcesScanned: 0 };

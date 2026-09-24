@@ -5,7 +5,7 @@ const { MonitorClient } = require('@azure/arm-monitor');
 const { batchGetResourceMetrics } = require('./monitor');
 const { thresholds, azureManagedPrefixes } = require('../config');
 const { cdnMonthlyCost } = require('./localcosts');
-const { detectEnvironment, detectTeam, missingTagGroups, resourceGroupFromId } = require('./tagging');
+const { detectEnvironment, detectTeam, missingTagGroups, resourceGroupFromId, matchesLocation } = require('./tagging');
 
 async function listAll(iterable) {
   const items = [];
@@ -16,7 +16,7 @@ async function listAll(iterable) {
 // Classic CDN profiles/endpoints only (Front Door's separate afdEndpoints
 // resource type is out of scope for v1, mirroring how src/aws/cloudfront.js
 // only covers CloudFront distributions, not Global Accelerator).
-async function analyzeCdn({ credential, subscriptionId, startTime, endTime, days, filter }) {
+async function analyzeCdn({ credential, subscriptionId, startTime, endTime, days, filter, location }) {
   const cdnClient = new CdnManagementClient(credential, subscriptionId);
   const monitorClient = new MonitorClient(credential, subscriptionId);
 
@@ -36,6 +36,7 @@ async function analyzeCdn({ credential, subscriptionId, startTime, endTime, days
     filtered = filtered.filter(e => e.name.toLowerCase().includes(needle) || (e.hostName || '').toLowerCase().includes(needle));
   }
   filtered = filtered.filter(e => !azureManagedPrefixes.some(p => e.name.toLowerCase().startsWith(p)));
+  filtered = filtered.filter(e => matchesLocation(e.location, location));
   console.log(`${filtered.length} found${filter ? ` matching "${filter}"` : ''}`);
 
   if (filtered.length === 0) return { findings: [], resourcesScanned: 0, estimatedMonthlyCost: 0 };

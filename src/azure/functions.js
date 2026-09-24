@@ -6,7 +6,7 @@ const { batchGetResourceMetrics } = require('./monitor');
 const { thresholds, azureManagedPrefixes } = require('../config');
 const { getRuntimeStatus } = require('./runtimes');
 const { functionsMonthlyCost } = require('./localcosts');
-const { detectEnvironment, detectTeam, missingTagGroups, adjustIdlePriority, resourceGroupFromId } = require('./tagging');
+const { detectEnvironment, detectTeam, missingTagGroups, adjustIdlePriority, resourceGroupFromId, matchesLocation } = require('./tagging');
 
 // Minimum previous-window invocations to qualify for anomaly detection — mirrors src/aws/lambda.js
 const ANOMALY_MIN_PREV_INVOCATIONS = 100;
@@ -18,19 +18,19 @@ async function listAll(iterable) {
   return items;
 }
 
-async function analyzeAzureFunctions({ credential, subscriptionId, location, startTime, endTime, days, filter }) {
+async function analyzeAzureFunctions({ credential, subscriptionId, startTime, endTime, days, filter, location }) {
   const webClient = new WebSiteManagementClient(credential, subscriptionId);
   const monitorClient = new MonitorClient(credential, subscriptionId);
 
   process.stdout.write('  Azure Functions: listing function apps... ');
   const allApps = await listAll(webClient.webApps.list());
   let apps = allApps.filter(a => (a.kind || '').toLowerCase().includes('functionapp'));
-  apps = apps.filter(a => (a.location || '').toLowerCase() === location.toLowerCase());
   if (filter) {
     const needle = filter.toLowerCase();
     apps = apps.filter(a => a.name.toLowerCase().includes(needle));
   }
   apps = apps.filter(a => !azureManagedPrefixes.some(p => a.name.toLowerCase().startsWith(p)));
+  apps = apps.filter(a => matchesLocation(a.location, location));
   console.log(`${apps.length} found${filter ? ` matching "${filter}"` : ''}`);
 
   if (apps.length === 0) return { findings: [], resourcesScanned: 0 };
@@ -145,19 +145,23 @@ async function analyzeAzureFunctions({ credential, subscriptionId, location, sta
     // unavailable here) — an Azure Functions app that's been explicitly stopped/disabled
     // AND has zero activity is a stronger, still-real "dead resource" signal, always HIGH.
     if (activityCount < thresholds.azure.functions.idleExecutions) {
-      const isAbandoned = activityCount === 0 && isStopped;
+      // A stopped/disabled app has zero executions by definition — that's the only
+      // case genuinely "not in use." A running app with zero or low executions is
+      // still deployed and reachable, so it's LOW_ACTIVITY (no delete suggestion),
+      // never IDLE — IDLE is reserved for confirmed-stopped resources.
+      const isAbandoned = isStopped;
       const priority = isAbandoned
         ? 'HIGH'
         : adjustIdlePriority(activityCount === 0 ? 'HIGH' : 'MEDIUM', environment);
-      const type = isAbandoned ? 'ABANDONED' : 'IDLE';
+      const type = isAbandoned ? 'ABANDONED' : 'LOW_ACTIVITY';
       const details = isAbandoned
         ? `App is ${app.state || 'stopped'}/disabled with zero executions in the last ${days} days — still deployed with live RBAC role assignments`
         : activityCount === 0
-          ? `No executions in the last ${days} days`
+          ? `No executions in the last ${days} days, but the app is still running`
           : `Only ${Math.round(activityCount)} executions in the last ${days} days`;
       const recommendation = isAbandoned
         ? `This function app is stopped and inactive. A stopped app still holds its managed identity role assignments, connection strings, and app settings — delete it if it's no longer needed to shrink your security surface.`
-        : `Verify this function app is still needed. If it belongs to a decommissioned feature, delete it to reduce clutter and shrink RBAC surface area.`;
+        : `This function app is running with minimal or no traffic. Consumption-plan apps already scale to zero between invocations, so low traffic alone isn't wasting reserved capacity — no action needed. If it's on a Premium/dedicated plan instead, consider degrading it to a consumption plan so idle periods stop costing reserved capacity. Just confirm it's still an actively-needed app before leaving it as-is.`;
 
       findings.push({
         ...base,
@@ -167,7 +171,9 @@ async function analyzeAzureFunctions({ credential, subscriptionId, location, sta
         recommendation,
         estimatedCurrentCost: null,
         estimatedMonthlySavings: null,
-        fixCommand: `# Confirm this function app is no longer needed, then:\naz functionapp delete --name "${app.name}" --resource-group "${rg}"`,
+        fixCommand: isAbandoned
+          ? `# Confirm this function app is no longer needed, then:\naz functionapp delete --name "${app.name}" --resource-group "${rg}"`
+          : null,
         suggestedAlarm: activityCount === 0 ? null : `az monitor metrics alert create \\\n  --name "cloudlens-idle-${app.name.substring(0, 50)}" \\\n  --resource-group "${rg}" \\\n  --scopes "${app.id}" \\\n  --condition "total FunctionExecutionCount < 1" \\\n  --window-size 1d --evaluation-frequency 1d`,
       });
     }

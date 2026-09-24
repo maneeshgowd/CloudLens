@@ -318,31 +318,40 @@ async function analyzeLambda({ region, startTime, endTime, days, filter }) {
       });
     }
 
-    // ── IDLE / ABANDONED ─────────────────────────────────────────────────
+    // ── IDLE / ABANDONED / LOW ACTIVITY ───────────────────────────────────
     if (invocations < thresholds.lambda.idleInvocations) {
       // ABANDONED: zero invocations AND code untouched for 28+ days → dead code, always HIGH
       const isAbandoned = invocations === 0 && ageDays !== null && ageDays >= abandonedIdleDays;
+      const isFullyIdle = invocations === 0;
 
       const priority = isAbandoned
         ? 'HIGH'
-        : adjustIdlePriority(invocations === 0 ? 'HIGH' : 'MEDIUM', environment);
+        : adjustIdlePriority(isFullyIdle ? 'HIGH' : 'MEDIUM', environment);
 
-      const type    = isAbandoned ? 'ABANDONED' : 'IDLE';
+      // Lambda has no running/stopped state — a function is either invoked or not.
+      // Zero invocations for the whole window is the direct analog of "not in use"
+      // (IDLE). Nonzero-but-low invocations means it IS being used, just rarely —
+      // that's LOW_ACTIVITY, never IDLE, and never a delete suggestion.
+      const type    = isAbandoned ? 'ABANDONED' : isFullyIdle ? 'IDLE' : 'LOW_ACTIVITY';
       const ageDisplay = ageDays !== null
         ? (ageDays >= 365 ? `~${(ageDays / 365).toFixed(1)} years` : `${ageDays} days`)
         : null;
       const details = isAbandoned
         ? `Zero invocations for ${days} days, last updated ${ageDisplay} ago — dead code still deployed with live IAM permissions and accumulating unpatched CVEs`
-        : invocations === 0
+        : isFullyIdle
           ? `No invocations in the last ${days} days${ageDisplay ? ` — last modified ${ageDisplay} ago` : ''}`
           : `Only ${Math.round(invocations)} invocations in the last ${days} days`;
       const recommendation = isAbandoned
         ? `This function is dead code deployed for ${ageDisplay} with no activity. Every deployed Lambda — active or not — holds IAM permissions and accumulates unpatched vulnerabilities as its runtime ages. Delete it and its CloudWatch log group to shrink your security surface.`
-        : `Review whether this function is still needed. If it belongs to a decommissioned feature, delete it and its associated log group to reduce clutter.`;
+        : isFullyIdle
+          ? `Review whether this function is still needed. If it belongs to a decommissioned feature, delete it and its associated log group to reduce clutter.`
+          : `This function is receiving minimal but nonzero traffic. On-demand Lambda only bills per invocation — there's no idle/reserved capacity cost to eliminate here, so no action is needed unless it's backed by Provisioned Concurrency (see the Provisioned Concurrency findings for that). Just confirm it's still an actively-needed function.`;
 
       const idleFixCommand = isAbandoned
         ? `aws lambda delete-function --function-name "${fn.FunctionName}"\naws logs delete-log-group --log-group-name "/aws/lambda/${fn.FunctionName}"\n# Deletes the function and cleans up its log group`
-        : `# Confirm this function is no longer needed, then:\naws lambda delete-function --function-name "${fn.FunctionName}"`;
+        : isFullyIdle
+          ? `# Confirm this function is no longer needed, then:\naws lambda delete-function --function-name "${fn.FunctionName}"`
+          : null;
 
       findings.push({
         ...base,

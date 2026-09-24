@@ -5,7 +5,7 @@ const { MonitorClient } = require('@azure/arm-monitor');
 const { batchGetResourceMetrics } = require('./monitor');
 const { thresholds, azureManagedPrefixes } = require('../config');
 const { eventGridMonthlyCost } = require('./localcosts');
-const { detectEnvironment, detectTeam, missingTagGroups, resourceGroupFromId } = require('./tagging');
+const { detectEnvironment, detectTeam, missingTagGroups, resourceGroupFromId, matchesLocation } = require('./tagging');
 
 async function listAll(iterable) {
   const items = [];
@@ -15,18 +15,19 @@ async function listAll(iterable) {
 
 // Custom topics only — mirrors src/aws/eventbridge.js's scope of custom rules
 // (system topics created implicitly by other Azure services are out of scope).
-async function analyzeEventGrid({ credential, subscriptionId, location, startTime, endTime, days, filter }) {
+async function analyzeEventGrid({ credential, subscriptionId, startTime, endTime, days, filter, location }) {
   const egClient = new EventGridManagementClient(credential, subscriptionId);
   const monitorClient = new MonitorClient(credential, subscriptionId);
 
   process.stdout.write('  Event Grid: listing topics... ');
   const allTopics = await listAll(egClient.topics.listBySubscription());
-  let topics = allTopics.filter(t => (t.location || '').toLowerCase() === location.toLowerCase());
+  let topics = allTopics;
   if (filter) {
     const needle = filter.toLowerCase();
     topics = topics.filter(t => t.name.toLowerCase().includes(needle));
   }
   topics = topics.filter(t => !azureManagedPrefixes.some(p => t.name.toLowerCase().startsWith(p)));
+  topics = topics.filter(t => matchesLocation(t.location, location));
   console.log(`${topics.length} found${filter ? ` matching "${filter}"` : ''}`);
 
   if (topics.length === 0) return { findings: [], resourcesScanned: 0 };

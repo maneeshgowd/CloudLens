@@ -5,7 +5,7 @@ const { MonitorClient } = require('@azure/arm-monitor');
 const { batchGetResourceMetrics } = require('./monitor');
 const { thresholds, azureManagedPrefixes } = require('../config');
 const { serviceBusMonthlyCost } = require('./localcosts');
-const { detectEnvironment, detectTeam, missingTagGroups, resourceGroupFromId } = require('./tagging');
+const { detectEnvironment, detectTeam, missingTagGroups, resourceGroupFromId, matchesLocation } = require('./tagging');
 
 async function listAll(iterable) {
   const items = [];
@@ -13,18 +13,19 @@ async function listAll(iterable) {
   return items;
 }
 
-async function analyzeServiceBus({ credential, subscriptionId, location, startTime, endTime, days, filter }) {
+async function analyzeServiceBus({ credential, subscriptionId, startTime, endTime, days, filter, location }) {
   const sbClient = new ServiceBusManagementClient(credential, subscriptionId);
   const monitorClient = new MonitorClient(credential, subscriptionId);
 
   process.stdout.write('  Service Bus: listing namespaces... ');
   const allNamespaces = await listAll(sbClient.namespaces.list());
-  let namespaces = allNamespaces.filter(n => (n.location || '').toLowerCase() === location.toLowerCase());
+  let namespaces = allNamespaces;
   if (filter) {
     const needle = filter.toLowerCase();
     namespaces = namespaces.filter(n => n.name.toLowerCase().includes(needle));
   }
   namespaces = namespaces.filter(n => !azureManagedPrefixes.some(p => n.name.toLowerCase().startsWith(p)));
+  namespaces = namespaces.filter(n => matchesLocation(n.location, location));
   console.log(`${namespaces.length} found${filter ? ` matching "${filter}"` : ''}`);
 
   if (namespaces.length === 0) return { findings: [], resourcesScanned: 0 };

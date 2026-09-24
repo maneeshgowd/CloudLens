@@ -53,14 +53,15 @@ const SERVICE_ALIASES = {
   securitygroups:       'security groups',
 };
 
-async function analyzeAWS({ days, region, filter, exclude = [] }) {
+async function analyzeAWS({ days, region, filter, exclude = [], include = [] }) {
   const endTime   = new Date();
   const startTime = new Date(endTime.getTime() - days * 24 * 60 * 60 * 1000);
 
   const ctx = { region, startTime, endTime, days, filter };
 
-  // Resolve aliases and build a set of canonical names to skip
+  // Resolve aliases and build sets of canonical names to skip/keep
   const excluded = new Set(exclude.map(e => SERVICE_ALIASES[e] ?? e));
+  const included = new Set(include.map(e => SERVICE_ALIASES[e] ?? e));
 
   const analysers = [
     { name: 'Lambda',                   fn: analyzeLambda                 },
@@ -78,7 +79,7 @@ async function analyzeAWS({ days, region, filter, exclude = [] }) {
     { name: 'MSK',                      fn: analyzeMSK                    },
     { name: 'Security Groups',          fn: analyzeSecurityGroups         },
     { name: 'IAM',                      fn: analyzeIAM                    },
-  ].filter(({ name }) => !excluded.has(name.toLowerCase()));
+  ].filter(({ name }) => (included.size === 0 || included.has(name.toLowerCase())) && !excluded.has(name.toLowerCase()));
 
   const findings = [];
   let resourcesScanned = 0;

@@ -45,6 +45,8 @@ const { analyzeApiManagement }   = require('./apimanagement');
 const { analyzeCdn }             = require('./cdn');
 const { analyzeEventHubs }       = require('./eventhubs');
 const { analyzeContainerApps }   = require('./containerapps');
+const { analyzeSqlDatabase }     = require('./sqldatabase');
+const { analyzeCertificates }    = require('./certificates');
 const { computeCostContext }     = require('./localcosts');
 const { buildAzureCredential }   = require('./credentials');
 
@@ -85,9 +87,20 @@ const SERVICE_ALIASES = {
   containerapps:      'container apps',
   'container-apps':   'container apps',
   aca:                'container apps',
+  sql:                'sql database',
+  sqldb:              'sql database',
+  sqldatabase:        'sql database',
+  'sql-database':     'sql database',
+  azuresql:           'sql database',
+  'azure-sql':        'sql database',
+  mssql:              'sql database',
+  certificates:       'ssl certificates',
+  certs:              'ssl certificates',
+  'ssl-certificates': 'ssl certificates',
+  ssl:                'ssl certificates',
 };
 
-async function analyzeAzure({ subscriptionId, tenantId, clientId, clientSecret, location, days, filter, exclude = [] }) {
+async function analyzeAzure({ subscriptionId, tenantId, clientId, clientSecret, location, days, filter, exclude = [], include = [] }) {
   if (!subscriptionId) {
     throw new Error('--azure-subscription is required for Azure analysis');
   }
@@ -99,6 +112,7 @@ async function analyzeAzure({ subscriptionId, tenantId, clientId, clientSecret, 
   const ctx = { credential, subscriptionId, location, startTime, endTime, days, filter };
 
   const excluded = new Set(exclude.map(e => SERVICE_ALIASES[e] ?? e));
+  const included = new Set(include.map(e => SERVICE_ALIASES[e] ?? e));
 
   const analysers = [
     { name: 'Azure Functions',  fn: analyzeAzureFunctions  },
@@ -115,7 +129,9 @@ async function analyzeAzure({ subscriptionId, tenantId, clientId, clientSecret, 
     { name: 'CDN',              fn: analyzeCdn             },
     { name: 'Event Hubs',       fn: analyzeEventHubs       },
     { name: 'Container Apps',   fn: analyzeContainerApps   },
-  ].filter(({ name }) => !excluded.has(name.toLowerCase()));
+    { name: 'SQL Database',     fn: analyzeSqlDatabase     },
+    { name: 'SSL Certificates', fn: analyzeCertificates    },
+  ].filter(({ name }) => (included.size === 0 || included.has(name.toLowerCase())) && !excluded.has(name.toLowerCase()));
 
   const findings = [];
   let resourcesScanned = 0;

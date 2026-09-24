@@ -75,6 +75,14 @@ module.exports = {
         lowCpuPct: 10,               // avg CPU% below this while running = UNDERUTILISED
         lowMemPct: 20,               // avg memory% below this while running = UNDERUTILISED
       },
+      sql: {
+        overProvisionedRatio: 0.10,  // avg DTU/CPU utilisation < 10% = HIGH (severely over-provisioned)
+        underutilisedRatio: 0.20,    // avg DTU/CPU utilisation < 20% = MEDIUM (over-provisioned)
+      },
+      certificates: {
+        expiryCriticalDays: 7,       // already expired, or expires within this many days = HIGH
+        expiryWarningDays: 30,       // expires within this many days = MEDIUM
+      },
     },
   },
 

@@ -5,7 +5,7 @@ const { MonitorClient } = require('@azure/arm-monitor');
 const { batchGetResourceMetrics } = require('./monitor');
 const { thresholds, azureManagedPrefixes } = require('../config');
 const { eventHubsMonthlyCost } = require('./localcosts');
-const { detectEnvironment, detectTeam, missingTagGroups, resourceGroupFromId } = require('./tagging');
+const { detectEnvironment, detectTeam, missingTagGroups, resourceGroupFromId, matchesLocation } = require('./tagging');
 
 async function listAll(iterable) {
   const items = [];
@@ -16,18 +16,19 @@ async function listAll(iterable) {
 // Namespace-level scan — mirrors src/aws/msk.js's cluster-level scope.
 // Throughput units (and their cost) are provisioned per namespace, not per
 // event hub, so namespace is the right unit for idle/underutilised findings.
-async function analyzeEventHubs({ credential, subscriptionId, location, startTime, endTime, days, filter }) {
+async function analyzeEventHubs({ credential, subscriptionId, startTime, endTime, days, filter, location }) {
   const ehClient = new EventHubManagementClient(credential, subscriptionId);
   const monitorClient = new MonitorClient(credential, subscriptionId);
 
   process.stdout.write('  Event Hubs: listing namespaces... ');
   const allNamespaces = await listAll(ehClient.namespaces.list());
-  let namespaces = allNamespaces.filter(ns => (ns.location || '').toLowerCase() === location.toLowerCase());
+  let namespaces = allNamespaces;
   if (filter) {
     const needle = filter.toLowerCase();
     namespaces = namespaces.filter(ns => ns.name.toLowerCase().includes(needle));
   }
   namespaces = namespaces.filter(ns => !azureManagedPrefixes.some(p => ns.name.toLowerCase().startsWith(p)));
+  namespaces = namespaces.filter(ns => matchesLocation(ns.location, location));
   console.log(`${namespaces.length} found${filter ? ` matching "${filter}"` : ''}`);
 
   if (namespaces.length === 0) return { findings: [], resourcesScanned: 0 };

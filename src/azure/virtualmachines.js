@@ -5,7 +5,7 @@ const { MonitorClient } = require('@azure/arm-monitor');
 const { batchGetResourceMetrics } = require('./monitor');
 const { thresholds, azureManagedPrefixes } = require('../config');
 const { vmMonthlyCost } = require('./localcosts');
-const { detectEnvironment, detectTeam, missingTagGroups, resourceGroupFromId } = require('./tagging');
+const { detectEnvironment, detectTeam, missingTagGroups, resourceGroupFromId, matchesLocation } = require('./tagging');
 
 async function listAll(iterable) {
   const items = [];
@@ -19,18 +19,19 @@ function powerState(vm) {
   return status ? status.code.replace('PowerState/', '') : 'unknown';
 }
 
-async function analyzeVirtualMachines({ credential, subscriptionId, location, startTime, endTime, days, filter }) {
+async function analyzeVirtualMachines({ credential, subscriptionId, startTime, endTime, days, filter, location }) {
   const computeClient = new ComputeManagementClient(credential, subscriptionId);
   const monitorClient = new MonitorClient(credential, subscriptionId);
 
   process.stdout.write('  Virtual Machines: listing VMs... ');
   const allVMs = await listAll(computeClient.virtualMachines.listAll());
-  let vms = allVMs.filter(vm => (vm.location || '').toLowerCase() === location.toLowerCase());
+  let vms = allVMs;
   if (filter) {
     const needle = filter.toLowerCase();
     vms = vms.filter(vm => vm.name.toLowerCase().includes(needle));
   }
   vms = vms.filter(vm => !azureManagedPrefixes.some(p => vm.name.toLowerCase().startsWith(p)));
+  vms = vms.filter(vm => matchesLocation(vm.location, location));
   console.log(`${vms.length} found${filter ? ` matching "${filter}"` : ''}`);
 
   if (vms.length === 0) return { findings: [], resourcesScanned: 0 };

@@ -2,7 +2,7 @@
 
 const { OperationalInsightsManagementClient } = require('@azure/arm-operationalinsights');
 const { thresholds, azureManagedPrefixes } = require('../config');
-const { detectEnvironment, detectTeam, missingTagGroups, resourceGroupFromId } = require('./tagging');
+const { detectEnvironment, detectTeam, missingTagGroups, resourceGroupFromId, matchesLocation } = require('./tagging');
 
 async function listAll(iterable) {
   const items = [];
@@ -10,17 +10,18 @@ async function listAll(iterable) {
   return items;
 }
 
-async function analyzeLogAnalytics({ credential, subscriptionId, location, filter }) {
+async function analyzeLogAnalytics({ credential, subscriptionId, filter, location }) {
   const client = new OperationalInsightsManagementClient(credential, subscriptionId);
 
   process.stdout.write('  Log Analytics: listing workspaces... ');
   const allWorkspaces = await listAll(client.workspaces.list());
-  let workspaces = allWorkspaces.filter(w => (w.location || '').toLowerCase() === location.toLowerCase());
+  let workspaces = allWorkspaces;
   if (filter) {
     const needle = filter.toLowerCase();
     workspaces = workspaces.filter(w => w.name.toLowerCase().includes(needle));
   }
   workspaces = workspaces.filter(w => !azureManagedPrefixes.some(p => w.name.toLowerCase().startsWith(p)));
+  workspaces = workspaces.filter(w => matchesLocation(w.location, location));
   console.log(`${workspaces.length} found${filter ? ` matching "${filter}"` : ''}`);
 
   if (workspaces.length === 0) return { findings: [], resourcesScanned: 0 };

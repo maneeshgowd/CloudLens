@@ -5,7 +5,7 @@ const { MonitorClient } = require('@azure/arm-monitor');
 const { batchGetResourceMetrics } = require('./monitor');
 const { thresholds, azureManagedPrefixes } = require('../config');
 const { containerAppsMonthlyCost } = require('./localcosts');
-const { detectEnvironment, detectTeam, missingTagGroups, resourceGroupFromId } = require('./tagging');
+const { detectEnvironment, detectTeam, missingTagGroups, resourceGroupFromId, matchesLocation } = require('./tagging');
 
 async function listAll(iterable) {
   const items = [];
@@ -16,18 +16,19 @@ async function listAll(iterable) {
 // Container Apps support scale-to-zero as an intentional feature (unlike ECS
 // services, which always have a fixed desired count), so 0 running replicas
 // is only a finding when the app's own minReplicas config expects at least 1.
-async function analyzeContainerApps({ credential, subscriptionId, location, startTime, endTime, days, filter }) {
+async function analyzeContainerApps({ credential, subscriptionId, startTime, endTime, days, filter, location }) {
   const caClient = new ContainerAppsAPIClient(credential, subscriptionId);
   const monitorClient = new MonitorClient(credential, subscriptionId);
 
   process.stdout.write('  Container Apps: listing apps... ');
   const allApps = await listAll(caClient.containerApps.listBySubscription());
-  let apps = allApps.filter(a => (a.location || '').toLowerCase() === location.toLowerCase());
+  let apps = allApps;
   if (filter) {
     const needle = filter.toLowerCase();
     apps = apps.filter(a => a.name.toLowerCase().includes(needle));
   }
   apps = apps.filter(a => !azureManagedPrefixes.some(p => a.name.toLowerCase().startsWith(p)));
+  apps = apps.filter(a => matchesLocation(a.location, location));
   console.log(`${apps.length} found${filter ? ` matching "${filter}"` : ''}`);
 
   if (apps.length === 0) return { findings: [], resourcesScanned: 0 };
