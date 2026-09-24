@@ -1,6 +1,7 @@
 'use strict';
 
 function generateReport({ findings, summary, provider, days }) {
+  const isAzure     = provider === 'azure';
   const now         = new Date();
   const highCount   = findings.filter(f => f.priority === 'HIGH').length;
   const mediumCount = findings.filter(f => f.priority === 'MEDIUM').length;
@@ -29,13 +30,18 @@ function generateReport({ findings, summary, provider, days }) {
     'App Service':             '#0078d4', 'Blob Storage':            '#0072c6',
     'Cosmos DB':               '#0072c6', 'Service Bus':             '#0078d4',
     'Log Analytics':           '#0078d4', 'Azure Monitor':           '#0072c6',
+    'Key Vault':               '#0072c6', 'Event Grid':              '#0078d4',
+    'API Management':          '#0072c6', 'CDN':                     '#0078d4',
+    'Event Hubs':              '#0072c6', 'Container Apps':          '#0078d4',
   };
   const serviceIconLabel = {
     'Lambda':'λ', 'Provisioned Concurrency':'PC', 'DynamoDB':'DB', 'SNS':'SNS',
     'S3':'S3', 'EventBridge':'EB', 'Log Groups':'CW', 'SQS':'SQS', 'ECS':'ECS',
     'NAT Gateway':'NAT', 'API Gateway':'API', 'Secrets Manager':'SM', 'CloudFront':'CF',
     'MSK':'MSK', 'Azure Functions':'fn', 'Virtual Machines':'VM', 'App Service':'APP',
-    'Blob Storage':'BLOB', 'Cosmos DB':'DB', 'Service Bus':'SB', 'Log Analytics':'LA', 'Azure Monitor':'MON',
+    'Blob Storage':'BLOB', 'Cosmos DB':'CDB', 'Service Bus':'SB', 'Log Analytics':'LA', 'Azure Monitor':'MON',
+    'Key Vault':'KV', 'Event Grid':'EG', 'API Management':'APIM', 'CDN':'CDN',
+    'Event Hubs':'EH', 'Container Apps':'CA',
   };
 
   // ── Type grouping ──────────────────────────────────────────────────────────
@@ -53,12 +59,26 @@ function generateReport({ findings, summary, provider, days }) {
     MSK_UNDERUTILIZED:  'IDLE',
     PC_OVER_PROVISIONED:'IDLE',
     OVER_ALLOCATED:     'IDLE',
+    OVER_PROVISIONED:   'IDLE',
+    STOPPED_NOT_DEALLOCATED: 'IDLE',
     THROTTLED:          'IDLE',
+    API_IDLE:           'IDLE',
+    CDN_IDLE:           'IDLE',
+    EH_IDLE:            'IDLE',
+    EH_UNDERUTILIZED:   'IDLE',
+    EH_THROTTLED:       'IDLE',
+    CA_NO_RUNNING_REPLICAS: 'IDLE',
+    UNDERUTILISED:      'IDLE',
+    NAT_IDLE:           'IDLE',
+    NAT_LOW_UTILISATION:'IDLE',
     DLQ_MESSAGES:       'QUEUE',
     STALE_MESSAGES:     'QUEUE',
     MSK_DURABILITY_RISK:'QUEUE',
     MISSING_TAGS:       'GOVERNANCE',
     NO_RETENTION:       'GOVERNANCE',
+    KV_NO_SOFT_DELETE:      'GOVERNANCE',
+    KV_NO_PURGE_PROTECTION: 'GOVERNANCE',
+    KV_PUBLIC_ACCESS:       'GOVERNANCE',
   };
   function typeGroupOf(t) { return TYPE_TO_GROUP[t] || 'OTHER'; }
 
@@ -69,16 +89,20 @@ function generateReport({ findings, summary, provider, days }) {
   }
 
   // Tab definitions — only show tabs that have at least one finding
+  const accessTermTab   = isAzure ? 'RBAC role assignments' : 'IAM (access) permissions';
+  const patcherTab      = isAzure ? 'Microsoft' : 'AWS';
+  const pipelineSourceTab = isAzure ? 'Event Grid topics' : 'Scheduled rules (EventBridge)';
+  const pipelineTargetTab = isAzure ? 'Azure Function' : 'Lambda function';
   const TAB_DEFS = [
     { type:'ALL',                icon:'≡',  label:'All Findings',     desc:'',          color:'#60a5fa' },
-    { type:'PIPELINE_SILENT',    icon:'⏸',  label:'Silent Pipelines', desc:'Scheduled rules (EventBridge) are active and running, but zero events are reaching the target Lambda function. The automated pipeline is broken — and no alarm has fired to alert you.', color:'#f97316' },
-    { type:'DEPRECATED_RUNTIME', icon:'⚠',  label:'EOL Runtimes',     desc:'Functions running software versions (Node.js, Python, etc.) that AWS no longer patches. Any security vulnerability published after the end-of-life date remains permanently unpatched in production.', color:'#ef4444' },
-    { type:'ABANDONED',          icon:'◌',  label:'Dead Code',        desc:'Functions deployed with zero invocations for an extended period — dead code still holding live IAM (access) permissions and accumulating unpatched vulnerabilities as the runtime ages.', color:'#f87171' },
+    { type:'PIPELINE_SILENT',    icon:'⏸',  label:'Silent Pipelines', desc:`${pipelineSourceTab} are active and provisioned, but zero events are reaching the target ${pipelineTargetTab}. The automated pipeline is broken — and no alarm has fired to alert you.`, color:'#f97316' },
+    { type:'DEPRECATED_RUNTIME', icon:'⚠',  label:'EOL Runtimes',     desc:`Functions running software versions (Node.js, Python, etc.) that ${patcherTab} no longer patches. Any security vulnerability published after the end-of-life date remains permanently unpatched in production.`, color:'#ef4444' },
+    { type:'ABANDONED',          icon:'◌',  label:'Dead Code',        desc:`Resources deployed with zero activity for an extended period — dead weight still holding live ${accessTermTab} and accumulating unpatched vulnerabilities as the runtime ages.`, color:'#f87171' },
     { type:'ANOMALY_DROP',       icon:'↘',  label:'Traffic Anomalies',desc:'Functions showing a sharp drop in invocations vs the prior period — typically a broken upstream caller or a silent deployment failure that no alarm caught.', color:'#ef4444' },
-    { type:'HIGH_ERROR_RATE',    icon:'✕',  label:'High Error Rate',  desc:'Functions where a significant percentage of invocations are failing. Compute cost is being spent on failed work that produces no value for users or downstream systems.', color:'#ef4444' },
-    { type:'IDLE',               icon:'□',  label:'Idle Resources',   desc:'Resources consuming allocated capacity (and cost) with minimal or zero actual usage — over-allocated memory, idle provisioned concurrency, underutilised clusters.', color:'#fb923c' },
-    { type:'QUEUE',              icon:'▣',  label:'Queue Issues',     desc:'Message queues (SQS, dead-letter queues) with stuck or unprocessed messages — indicating processing failures or backlog accumulation that may affect downstream consumers.', color:'#fb923c' },
-    { type:'GOVERNANCE',         icon:'▤',  label:'Governance',       desc:'Missing resource tags, absent log retention policies, and other hygiene issues that affect cost attribution, security policies, and compliance requirements.', color:'#94a3b8' },
+    { type:'HIGH_ERROR_RATE',    icon:'✕',  label:'High Error Rate',  desc:'Resources where a significant percentage of operations are failing (errors, timeouts, dropped packets, restarts, or failed deliveries). Cost is being spent on failed work that produces no value for users or downstream systems.', color:'#ef4444' },
+    { type:'IDLE',               icon:'□',  label:'Idle Resources',   desc:'Resources consuming allocated capacity (and cost) with minimal or zero actual usage — over-allocated memory, idle provisioned/throughput units, underutilised clusters or gateways.', color:'#fb923c' },
+    { type:'QUEUE',              icon:'▣',  label:'Queue Issues',     desc:'Message queues and topics (SQS/Service Bus/Event Grid, dead-letter destinations) with stuck or unprocessed messages — indicating processing failures or backlog accumulation that may affect downstream consumers.', color:'#fb923c' },
+    { type:'GOVERNANCE',         icon:'▤',  label:'Governance',       desc:'Missing resource tags, absent log retention policies, disabled soft-delete/purge protection, open network access, and other hygiene issues that affect cost attribution, security policies, and compliance requirements.', color:'#94a3b8' },
   ];
 
   const tabsHTML = TAB_DEFS
@@ -98,30 +122,57 @@ function generateReport({ findings, summary, provider, days }) {
     }).join('');
 
   // Plain-English explanations shown inside the detail panel
+  const patcher     = isAzure ? 'Microsoft' : 'AWS';
+  const throttleExplain = isAzure
+    ? 'This function is being throttled — a large share of requests are returning HTTP 429 as the app hits its plan\'s concurrency or scale-out limits. Affected calls may fail silently without a retry mechanism.'
+    : 'This function is being throttled — AWS is rejecting invocations because concurrent execution limits are reached. Affected calls may fail silently without a retry mechanism.';
+  const abandonedExplain = isAzure
+    ? 'Zero executions over the window and the app is stopped or disabled. This is dead weight — but it still holds live RBAC role assignments, connection strings, and app settings, and will accumulate unpatched vulnerabilities as its runtime ages.'
+    : 'Zero invocations for an extended period with no recent code changes. This is dead code — but it still holds live IAM permissions and will accumulate unpatched vulnerabilities as its runtime ages. Every deployed Lambda is an attack surface, active or not.';
+
+  const pipelineExplain = isAzure
+    ? 'This Event Grid topic is provisioned and enabled, but zero events are arriving at its target Azure Function. The automated pipeline is completely broken — and no Azure Monitor alert has fired to tell you. This failure is only visible when Event Grid and Functions are analysed together.'
+    : 'This EventBridge rule is enabled and scheduled to run, but zero events are arriving at its target Lambda function. The automated pipeline is completely broken — and no CloudWatch alarm has fired to alert you. This failure is only visible when EventBridge and Lambda are analysed together.';
+
   const TYPE_EXPLAIN = {
-    PIPELINE_SILENT:     'This EventBridge rule is enabled and scheduled to run, but zero events are arriving at its target Lambda function. The automated pipeline is completely broken — and no CloudWatch alarm has fired to alert you. This failure is only visible when EventBridge and Lambda are analysed together.',
-    DEPRECATED_RUNTIME:  'AWS has stopped releasing security patches for this software version. Any CVE (security vulnerability) published after the end-of-life date is permanently unpatched in this function. These appear as open findings in security audits and can block compliance certifications.',
-    ABANDONED:           'Zero invocations for an extended period with no recent code changes. This is dead code — but it still holds live IAM permissions and will accumulate unpatched vulnerabilities as its runtime ages. Every deployed Lambda is an attack surface, active or not.',
+    PIPELINE_SILENT:     pipelineExplain,
+    DEPRECATED_RUNTIME:  `${patcher} has stopped releasing security patches for this software version. Any CVE (security vulnerability) published after the end-of-life date is permanently unpatched in this function. These appear as open findings in security audits and can block compliance certifications.`,
+    ABANDONED:           abandonedExplain,
     ANOMALY_DROP:        "This function's invocations dropped sharply compared to the prior period. This is typically caused by a broken upstream caller that stopped sending requests, or a silent deployment failure that reduced traffic without triggering any monitoring alert.",
-    HIGH_ERROR_RATE:     'More than 20% of invocations are failing (throwing errors or timing out). Compute cost is being spent on failed work, and any services or users depending on this function may be receiving errors.',
+    HIGH_ERROR_RATE:     'More than 20% of operations are failing (errors, timeouts, dropped packets, or failed deliveries, depending on the service). Cost is being spent on failed work, and any services or users depending on this resource may be receiving errors.',
     IDLE:                'This resource is consuming allocated capacity (and cost) with minimal or zero actual usage. Rightsizing or removing it recovers cost without impacting active workloads.',
     PC_IDLE:             'Provisioned Concurrency keeps instances warm to eliminate cold starts — but this function has had zero invocations. You are paying for warm instances that are never invoked.',
     PC_OVER_PROVISIONED: 'Provisioned Concurrency is set higher than the function\'s peak utilisation. Reducing the setting saves cost without impacting cold-start performance.',
-    DLQ_MESSAGES:        'Messages have accumulated in the dead-letter queue (DLQ) — the primary processor is failing to handle them. These failed messages have not been processed or reviewed.',
+    DLQ_MESSAGES:        'Messages or events have accumulated in the dead-letter destination — the primary subscriber is failing to process them. These failed items have not been processed or reviewed.',
     STALE_MESSAGES:      'Messages in this queue are older than expected, suggesting the consumer stopped processing or the queue is backed up with unhandled messages.',
-    MISSING_TAGS:        'This resource is missing recommended tags (Environment, Team/Owner). Tags are required for cost attribution, security policies, and automated governance across the account.',
-    NO_RETENTION:        'This CloudWatch log group has no retention policy — logs are kept indefinitely, accumulating storage costs and potentially complicating data-retention compliance.',
-    THROTTLED:           'This function is being throttled — AWS is rejecting invocations because concurrent execution limits are reached. Affected calls may fail silently without a retry mechanism.',
-    OVER_ALLOCATED:      'Configured memory is far above actual peak usage. AWS charges for configured memory, not used memory — reducing the setting directly reduces compute cost per invocation.',
+    MISSING_TAGS:        'This resource is missing recommended tags (Environment, Team/Owner). Tags are required for cost attribution, security policies, and automated governance across the account/subscription.',
+    NO_RETENTION:        'This log group has no retention policy — logs are kept indefinitely, accumulating storage costs and potentially complicating data-retention compliance.',
+    THROTTLED:           throttleExplain,
+    OVER_ALLOCATED:      'Configured memory is far above actual peak usage. Cloud providers charge for configured memory, not used memory — reducing the setting directly reduces compute cost per invocation.',
+    OVER_PROVISIONED:    'Provisioned capacity (throughput, RU/s, IOPS, gateway scale units) is far above actual usage. You are paying for capacity that sits idle — reducing it, or switching to an autoscale/on-demand mode, cuts cost without affecting performance.',
+    STOPPED_NOT_DEALLOCATED: 'This VM is stopped but not deallocated — Azure still reserves and bills for its compute capacity. Only a deallocated VM stops compute charges; a merely-stopped one keeps costing money while doing no work.',
     MSK_OFFLINE:         'This Kafka (MSK) cluster has offline partitions — topic partitions are unavailable, meaning producers cannot write and consumers cannot read the affected data.',
     MSK_DURABILITY_RISK: 'The replication factor is below the recommended minimum. A single broker failure could result in data loss on this cluster.',
     MSK_DISK_CRITICAL:   'Disk usage on this MSK cluster is critically high. When disks fill completely, Kafka brokers can fail and data can be lost.',
     MSK_IDLE:            'This Kafka (MSK) cluster has had minimal or zero message traffic. MSK is one of the more expensive AWS services — an idle cluster is significant cost waste.',
     MSK_UNDERUTILIZED:   'This MSK cluster has low throughput relative to its provisioned broker capacity. Consider scaling down to a smaller broker type to reduce cost.',
+    API_IDLE:            'This API Management gateway has served zero requests over the window. Dedicated tiers (Developer, Basic, Standard, Premium) bill a fixed fee regardless of traffic — an idle gateway is pure waste. Consumption tier has no fixed cost, but an unused gateway is still clutter and an unnecessary attack surface.',
+    CDN_IDLE:            'This CDN endpoint is provisioned and configured but has served zero requests. It carries no direct data-transfer cost while idle, but represents an unused, unmonitored edge of your attack surface.',
+    CDN_ACTIVE:          'This CDN endpoint is actively serving traffic. Shown for cost visibility — review cache hit ratio and compression settings to ensure you are not paying for avoidable origin fetches.',
+    EH_IDLE:             'This Event Hubs namespace has had zero messages in or out over the window. Throughput units are billed on a fixed hourly basis regardless of traffic — an idle namespace is a fixed, avoidable cost.',
+    EH_UNDERUTILIZED:    'This Event Hubs namespace is provisioned with more throughput units than its actual traffic requires. You are paying for ingress/egress capacity that sits mostly idle.',
+    EH_THROTTLED:        'Producers or consumers on this Event Hubs namespace are being throttled or hitting quota limits. This causes retries, added latency, or dropped events on the client side.',
+    CA_NO_RUNNING_REPLICAS: 'This Container App is configured to always run at least one replica (minReplicas > 0), but zero replicas actually ran during the window. You are paying the fixed per-replica charge for a container that never started successfully.',
+    UNDERUTILISED:       'This Container App\'s replicas are running well below their allocated CPU and memory. Container Apps bills per-replica resource allocation regardless of actual usage, so lowering the per-container CPU/memory (or replica count) directly reduces cost.',
+    KV_NO_SOFT_DELETE:   'Soft delete is disabled on this Key Vault. Without it, a deleted vault and every secret, key, and certificate inside it is unrecoverable — accidental deletion becomes permanent data loss.',
+    KV_NO_PURGE_PROTECTION: 'Purge protection is disabled. Soft delete alone still allows anyone with delete permissions to permanently purge the vault before its retention period ends, bypassing the recovery window soft delete is meant to provide.',
+    KV_PUBLIC_ACCESS:    'This vault\'s network ACLs default to allowing access from any public IP. Secrets, keys, and certificates are reachable over the public internet unless narrowed by an explicit allow-list, virtual network rule, or private endpoint.',
+    NAT_IDLE:            'This NAT Gateway processed minimal or no traffic over the window. NAT Gateways bill a fixed hourly charge regardless of traffic volume, so an idle gateway is a fixed, avoidable cost.',
+    NAT_LOW_UTILISATION: 'This NAT Gateway is seeing low outbound traffic relative to a dedicated gateway\'s fixed cost. Consider consolidating with another subnet\'s gateway if this level of usage persists.',
   };
 
   // ── Executive summary ──────────────────────────────────────────────────────
-  const HTYPES      = new Set(['ANOMALY_DROP','HIGH_ERROR_RATE','PIPELINE_SILENT','DLQ_MESSAGES','STALE_MESSAGES','ABANDONED','THROTTLED']);
+  const HTYPES      = new Set(['ANOMALY_DROP','HIGH_ERROR_RATE','PIPELINE_SILENT','DLQ_MESSAGES','STALE_MESSAGES','ABANDONED','THROTTLED','EH_THROTTLED','CA_NO_RUNNING_REPLICAS']);
   const healthCount   = findings.filter(f => HTYPES.has(f.type)).length;
   const securityCount = findings.filter(f => f.type === 'DEPRECATED_RUNTIME' || f.type === 'ABANDONED').length;
   const totalSpend    = costCtx?.totalEstimatedCost ?? 0;
@@ -149,14 +200,15 @@ function generateReport({ findings, summary, provider, days }) {
     const runtimeList = eolRuntimes.length > 0 ? ` (${eolRuntimes.slice(0, 3).join(', ')})` : '';
     narrativeParts.push(
       `<strong>${deprecatedCount} function${deprecatedCount > 1 ? 's are' : ' is'} running end-of-life runtimes${runtimeList}</strong> — ` +
-      `AWS has stopped shipping security patches. Any CVE published since the EOL date is permanently unpatched in production.`
+      `${patcherTab} has stopped shipping security patches. Any CVE published since the EOL date is permanently unpatched in production.`
     );
   }
   if (pipelineCount > 0) {
     const pl = pipelineCount > 1;
+    const pipelineSourceNarr = isAzure ? 'Event Grid topic' : 'EventBridge rule';
     narrativeParts.push(
       `<strong>${pipelineCount} automated pipeline${pl ? 's are' : ' is'} completely silent</strong> — ` +
-      `the EventBridge rule${pl ? 's are' : ' is'} enabled and scheduled but zero events are reaching the target function${pl ? 's' : ''}. No alarm has fired.`
+      `the ${pipelineSourceNarr}${pl ? 's are' : ' is'} enabled and provisioned but zero events are reaching the target function${pl ? 's' : ''}. No alarm has fired.`
     );
   }
   const anomalyFindings = findings.filter(f => f.type === 'ANOMALY_DROP');
@@ -172,9 +224,10 @@ function generateReport({ findings, summary, provider, days }) {
     const oldest = abandonedFindings[0];
     const age    = oldest.metrics?.lastModifiedDaysAgo;
     const ageStr = age != null ? (age >= 365 ? `~${(age / 365).toFixed(1)} years` : `${age} days`) : 'an extended period';
+    const resourceNoun = isAzure ? 'resource' : 'Lambda function';
     narrativeParts.push(
-      `<strong>${abandonedFindings.length} Lambda function${abandonedFindings.length > 1 ? 's have' : ' has'} been deployed for months with zero activity</strong> — ` +
-      `dead code still holding live IAM permissions. Oldest: <code>${escapeHtml(oldest.resourceName)}</code>, unmodified for ${ageStr}.`
+      `<strong>${abandonedFindings.length} ${resourceNoun}${abandonedFindings.length > 1 ? 's have' : ' has'} been deployed for months with zero activity</strong> — ` +
+      `dead weight still holding live ${accessTermTab}. Oldest: <code>${escapeHtml(oldest.resourceName)}</code>, unmodified for ${ageStr}.`
     );
   }
   narrativeParts.push(
@@ -211,6 +264,12 @@ function generateReport({ findings, summary, provider, days }) {
       MSK_IDLE:'Idle Cluster', MSK_UNDERUTILIZED:'Low Utilisation', MSK_OFFLINE:'Offline Partitions',
       MSK_DURABILITY_RISK:'Durability Risk', MSK_DISK_CRITICAL:'Disk Critical',
       MISSING_TAGS:'Missing Tags', NO_RETENTION:'No Log Retention',
+      OVER_PROVISIONED:'Over-provisioned', STOPPED_NOT_DEALLOCATED:'Stopped, Not Deallocated',
+      API_IDLE:'Idle Gateway', CDN_IDLE:'Idle Endpoint', CDN_ACTIVE:'Active (Cost Visibility)',
+      EH_IDLE:'Idle Namespace', EH_UNDERUTILIZED:'Low Throughput', EH_THROTTLED:'Throttled',
+      CA_NO_RUNNING_REPLICAS:'No Running Replicas', UNDERUTILISED:'Underutilised',
+      KV_NO_SOFT_DELETE:'No Soft Delete', KV_NO_PURGE_PROTECTION:'No Purge Protection',
+      KV_PUBLIC_ACCESS:'Public Network Access', NAT_IDLE:'Idle Gateway', NAT_LOW_UTILISATION:'Low Utilisation',
     };
     return labels[type] || type.replace(/_/g, ' ');
   }

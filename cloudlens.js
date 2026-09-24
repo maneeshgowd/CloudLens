@@ -15,12 +15,14 @@ program
   .option('--days <number>',        'Analysis window in days',             '7')
   // AWS options
   .option('--region <region>',      'AWS region to analyse',               'us-east-1')
-  // Azure options
+  // Azure options — values are read from --azure-env-file (a .sh-style
+  // credentials file) by default; any of these flags overrides the file.
   .option('--azure-subscription <id>',    'Azure Subscription ID')
   .option('--azure-tenant <id>',          'Azure Tenant ID')
   .option('--azure-client-id <id>',       'Azure Client ID (service principal)')
   .option('--azure-client-secret <secret>','Azure Client Secret')
-  .option('--azure-location <location>',  'Azure location to analyse',     'eastus')
+  .option('--azure-location <location>',  'Azure location to analyse')
+  .option('--azure-env-file <path>',      'Path to a .sh file with AZURE_SUBSCRIPTION_ID/AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET/AZURE_LOCATION', './.run-creds.sh')
   // Output
   .option('--output <path>',        'Output path for HTML report',         './cloudlens-report.html')
   .option('--filter <string>',      'Only include resources whose name contains this string (case-insensitive)')
@@ -44,10 +46,30 @@ async function main() {
     process.exit(1);
   }
 
+  let azureConfig = null;
+  if (provider === 'azure') {
+    const { loadShellEnvFile } = require('./src/azure/envfile');
+    const envFileVars = loadShellEnvFile(opts.azureEnvFile);
+    const envFileUsed = Object.keys(envFileVars).length > 0;
+
+    azureConfig = {
+      subscriptionId: opts.azureSubscription || envFileVars.AZURE_SUBSCRIPTION_ID,
+      tenantId:       opts.azureTenant       || envFileVars.AZURE_TENANT_ID,
+      clientId:       opts.azureClientId     || envFileVars.AZURE_CLIENT_ID,
+      clientSecret:   opts.azureClientSecret || envFileVars.AZURE_CLIENT_SECRET,
+      location:       opts.azureLocation     || envFileVars.AZURE_LOCATION || 'eastus',
+    };
+
+    if (envFileUsed) azureConfig.envFilePath = path.resolve(opts.azureEnvFile);
+  }
+
   printBanner();
   console.log(`  Provider : ${provider.toUpperCase()}`);
   if (provider === 'aws')   console.log(`  Region   : ${opts.region}`);
-  if (provider === 'azure') console.log(`  Location : ${opts.azureLocation}`);
+  if (provider === 'azure') {
+    console.log(`  Location : ${azureConfig.location}`);
+    if (azureConfig.envFilePath) console.log(`  Config   : ${azureConfig.envFilePath}`);
+  }
   console.log(`  Window   : last ${days} days`);
   if (opts.filter) console.log(`  Filter   : applied`);
   if (opts.excludeService) console.log(`  Excluding: ${opts.excludeService}`);
@@ -87,11 +109,11 @@ async function main() {
       console.log('Scanning Azure resources...\n');
       const result = await analyzeAzure({
         days,
-        subscriptionId: opts.azureSubscription,
-        tenantId:       opts.azureTenant,
-        clientId:       opts.azureClientId,
-        clientSecret:   opts.azureClientSecret,
-        location:       opts.azureLocation,
+        subscriptionId: azureConfig.subscriptionId,
+        tenantId:       azureConfig.tenantId,
+        clientId:       azureConfig.clientId,
+        clientSecret:   azureConfig.clientSecret,
+        location:       azureConfig.location,
         filter:         opts.filter,
         exclude,
       });
@@ -100,7 +122,7 @@ async function main() {
     } catch (err) {
       console.error(`\nAzure analysis failed: ${err.message}`);
       if (err.message.includes('credential') || err.message.includes('authentication')) {
-        console.error('\nHint: provide --azure-subscription, --azure-tenant, --azure-client-id, --azure-client-secret');
+        console.error(`\nHint: set AZURE_SUBSCRIPTION_ID/AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET in ${opts.azureEnvFile} (see .run-creds.sh.example), or pass --azure-subscription/--azure-tenant/--azure-client-id/--azure-client-secret`);
       }
       if (process.env.DEBUG) console.error(err.stack);
       process.exit(1);

@@ -32,6 +32,50 @@ module.exports = {
       // Utilisation thresholds
       underutilizedKBps: 100,           // avg combined throughput < 100 KB/s = MSK_UNDERUTILIZED (MEDIUM)
     },
+    azure: {
+      functions: {
+        idleExecutions: 10,          // fewer than this over the window = IDLE
+        throttleMinRequests: 10,     // minimum requests before throttle ratio is meaningful
+        throttleRatio: 0.05,         // Http429 / Requests above this = THROTTLED
+      },
+      vm: {
+        lowCpuPct: 10,               // avg CPU < 10% while running = OVER_ALLOCATED (MEDIUM)
+        veryLowCpuPct: 3,            // avg CPU < 3% while running = OVER_ALLOCATED (HIGH)
+      },
+      cosmos: {
+        overProvisionedRatio: 0.10,  // normalized RU consumption < 10% = HIGH (severely over-provisioned)
+        underutilisedRatio: 0.20,    // normalized RU consumption < 20% = MEDIUM (over-provisioned)
+      },
+      loganalytics: {
+        retentionCeilingDays: 90,    // retentionInDays above this = governance finding
+      },
+      servicebus: {
+        staleActiveMessages: 1,      // active/scheduled messages sitting with 0 dequeues over window = STALE_MESSAGES
+      },
+      keyvault: {
+        idleApiHits: 1,              // fewer than this over window = KV_IDLE
+      },
+      natgateway: {
+        idleGB: 0.1,                 // total GB processed below this over window = NAT_IDLE
+        lowUtilisationGBPerDay: 1,   // GB/day below this = NAT_LOW_UTILISATION
+      },
+      eventgrid: {
+        idlePublished: 1,            // fewer than this over window = IDLE
+      },
+      apimanagement: {
+        idleRequests: 1,             // fewer than this over window = API_IDLE
+      },
+      cdn: {
+        idleRequests: 1,             // fewer than this over window = CDN_IDLE
+      },
+      eventhubs: {
+        underutilizedKBps: 100,      // avg combined incoming+outgoing throughput < 100 KB/s = EH_UNDERUTILIZED
+      },
+      containerapps: {
+        lowCpuPct: 10,               // avg CPU% below this while running = UNDERUTILISED
+        lowMemPct: 20,               // avg memory% below this while running = UNDERUTILISED
+      },
+    },
   },
 
   // Resources with zero invocations AND unmodified for this many days → ABANDONED (always HIGH, no env downgrade)
@@ -56,5 +100,14 @@ module.exports = {
     'aws-service-catalog-',
     'aws-codestar-',
     'stacksets-exec-',
+  ],
+
+  // Resource name prefixes that are Azure-managed (auto-created by Azure platform
+  // services) and should never be flagged as findings. Distinct from `managedPrefixes`
+  // above, which only ever matches AWS resource names.
+  azureManagedPrefixes: [
+    'networkwatcher_',      // auto-created by Azure Network Watcher, one per region
+    'defaultworkspace-',    // auto-created Log Analytics workspace for Defender/Sentinel onboarding
+    'cloud-shell-storage-', // auto-created storage account backing Azure Cloud Shell
   ],
 };
