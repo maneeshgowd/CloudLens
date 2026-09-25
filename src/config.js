@@ -83,6 +83,10 @@ module.exports = {
         expiryCriticalDays: 7,       // already expired, or expires within this many days = HIGH
         expiryWarningDays: 30,       // expires within this many days = MEDIUM
       },
+      appRegistrations: {
+        expiryCriticalDays: 7,       // already expired, or expires within this many days = HIGH
+        expiryWarningDays: 30,       // expires within this many days = MEDIUM
+      },
     },
   },
 

@@ -3,7 +3,6 @@
 const { analyzeLambda }               = require('./lambda');
 const { analyzeProvisionedConcurrency } = require('./provisionedconcurrency');
 const { analyzeDynamoDB }             = require('./dynamodb');
-const { analyzeSNS }                  = require('./sns');
 const { analyzS3 }                    = require('./s3');
 const { analyzeEventBridge }          = require('./eventbridge');
 const { analyzeSQS }                  = require('./sqs');
@@ -22,7 +21,6 @@ const SERVICE_ALIASES = {
   lambda:               'lambda',
   dynamodb:             'dynamodb',
   dynamo:               'dynamodb',
-  sns:                  'sns',
   s3:                   's3',
   eventbridge:          'eventbridge',
   events:               'eventbridge',
@@ -67,7 +65,6 @@ async function analyzeAWS({ days, region, filter, exclude = [], include = [] }) 
     { name: 'Lambda',                   fn: analyzeLambda                 },
     { name: 'Provisioned Concurrency',  fn: analyzeProvisionedConcurrency },
     { name: 'DynamoDB',                 fn: analyzeDynamoDB               },
-    { name: 'SNS',                      fn: analyzeSNS                    },
     { name: 'S3',                       fn: analyzS3                      },
     { name: 'EventBridge',              fn: analyzeEventBridge            },
     { name: 'SQS',                      fn: analyzeSQS                    },

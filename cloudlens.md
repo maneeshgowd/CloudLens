@@ -106,6 +106,20 @@ az ad sp create-for-rbac --name cloudlens-reader --role Reader \
 
 Pass the output values via `--azure-tenant`, `--azure-client-id`, `--azure-client-secret`.
 
+#### App Registrations (optional)
+
+The **App Registrations** scanner reads Entra ID (Azure AD) app registration client secrets and certificate credentials — a tenant-directory resource, not a subscription resource, so the `Reader` role above does not cover it. It requires the Microsoft Graph **`Application.Read.All`** application permission, granted to the same service principal and admin-consented:
+
+```bash
+az ad app permission add --id <client-id> \
+  --api 00000003-0000-0000-c000-000000000000 \
+  --api-permissions 9a5d68dd-52b0-4cc2-bd40-abcf44112121=Role
+
+az ad app permission admin-consent --id <client-id>
+```
+
+If this permission is not granted, the scanner is skipped like any other failed service — the rest of the scan is unaffected.
+
 ---
 
 ## What Gets Scanned
@@ -130,7 +144,7 @@ Pass the output values via `--azure-tenant`, `--azure-client-id`, `--azure-clien
 | **CloudFront** | Idle distributions with no requests |
 | **MSK** | Offline partitions, durability risk, disk critical, idle/under-utilised clusters |
 
-### Azure — 13 Services
+### Azure — 17 Services
 
 | Service | Key Finding Types |
 |---|---|
@@ -147,6 +161,10 @@ Pass the output values via `--azure-tenant`, `--azure-client-id`, `--azure-clien
 | **API Management** | Idle APIs with no traffic |
 | **Log Analytics** | Workspaces with no retention policy |
 | **NAT Gateway** | Idle gateways |
+| **CDN** | Idle endpoints |
+| **SQL Database** | Over-provisioned/under-utilised DTU/CPU |
+| **SSL Certificates** | Expiring/expired App Service certificates |
+| **App Registrations** | Expiring/expired client secrets and certificate credentials |
 
 ---
 

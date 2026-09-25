@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>CloudLens Architecture</title>
+    <style>
+      :root {
+        --bg: #f7f7f5;
+        --fg: #1c1c1a;
+        --muted: #6b6b66;
+        --line: #d8d6d0;
+        --accent: #b45309;
+        --accent-bg: #fef3e2;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme='light']) {
+          --bg: #17171a;
+          --fg: #e9e8e4;
+          --muted: #9a9a94;
+          --line: #3a3a3e;
+          --accent: #f0a95e;
+          --accent-bg: #2c2213;
+        }
+      }
+      :root[data-theme='dark'] {
+        --bg: #17171a;
+        --fg: #e9e8e4;
+        --muted: #9a9a94;
+        --line: #3a3a3e;
+        --accent: #f0a95e;
+        --accent-bg: #2c2213;
+      }
+      body {
+        margin: 0;
+        padding: 32px 16px 60px;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      }
+      .wrap {
+        max-width: 900px;
+        margin: 0 auto;
+      }
+      h1 {
+        font-size: 1.4rem;
+        margin: 0 0 4px;
+      }
+      .sub {
+        color: var(--muted);
+        font-size: 0.92rem;
+        margin: 0 0 28px;
+      }
+      figure {
+        margin: 0;
+      }
+      svg {
+        width: 100%;
+        height: auto;
+        display: block;
+        overflow: visible;
+      }
+      figcaption {
+        margin-top: 14px;
+        color: var(--muted);
+        font-size: 0.85rem;
+        line-height: 1.5;
+      }
+      text {
+        fill: currentColor;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      }
+      .lbl {
+        font-size: 12.5px;
+        fill: var(--muted);
+      }
+      .title {
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .sub-t {
+        font-size: 12px;
+        fill: var(--muted);
+      }
+      .box {
+        fill: var(--bg);
+        stroke: currentColor;
+        stroke-width: 1.4;
+      }
+      .box-accent {
+        fill: var(--accent-bg);
+        stroke: var(--accent);
+        stroke-width: 1.6;
+      }
+      .arrow {
+        stroke: currentColor;
+        stroke-width: 1.4;
+        fill: none;
+      }
+      footer {
+        margin-top: 40px;
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+      code {
+        background: var(--accent-bg);
+        padding: 1px 5px;
+        border-radius: 3px;
+        font-size: 0.85em;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>CloudLens architecture</h1>
+      <p class="sub">One CLI, two parallel read-only scan pipelines, one merged report.</p>
+
+      <figure>
+        <svg
+          viewBox="0 0 900 560"
+          role="img"
+          aria-label="cloudlens.js runs an AWS pipeline and an Azure pipeline in parallel, each an analyzer fanning out to that provider's scanner modules against the real cloud APIs read-only. Both pipelines return findings to cloudlens.js, which merges and sorts them, hands the result to report/generator.js, and writes the single cloudlens-report.html file."
+        >
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor" />
+            </marker>
+          </defs>
+
+          <!-- CLI entry -->
+          <rect class="box" x="290" y="16" width="320" height="60" rx="6" />
+          <text x="450" y="40" text-anchor="middle" class="title">cloudlens.js</text>
+          <text x="450" y="58" text-anchor="middle" class="sub-t">CLI — reads flags + credentials</text>
+
+          <!-- fork -->
+          <path d="M 380 76 L 380 100 L 230 100 L 230 122" class="arrow" marker-end="url(#arrow)" />
+          <path d="M 520 76 L 520 100 L 670 100 L 670 122" class="arrow" marker-end="url(#arrow)" />
+
+          <!-- AWS pipeline -->
+          <rect class="box-accent" x="40" y="122" width="380" height="110" rx="6" />
+          <text x="230" y="150" text-anchor="middle" class="title">AWS Scanner</text>
+          <text x="230" y="172" text-anchor="middle" class="sub-t">aws/analyzer.js runs 14 scanner modules</text>
+          <text x="230" y="190" text-anchor="middle" class="sub-t">(lambda, dynamodb, s3, ecs, iam, ...)</text>
+          <text x="230" y="212" text-anchor="middle" class="sub-t">↳ read-only calls to AWS APIs</text>
+
+          <!-- Azure pipeline -->
+          <rect class="box-accent" x="480" y="122" width="380" height="110" rx="6" />
+          <text x="670" y="150" text-anchor="middle" class="title">Azure Scanner</text>
+          <text x="670" y="172" text-anchor="middle" class="sub-t">azure/analyzer.js runs 17 scanner modules</text>
+          <text x="670" y="190" text-anchor="middle" class="sub-t">(functions, VMs, cosmos DB, key vault, ...)</text>
+          <text x="670" y="212" text-anchor="middle" class="sub-t">↳ read-only calls to Azure APIs</text>
+
+          <!-- join -->
+          <path d="M 230 232 L 230 270 L 380 300" class="arrow" marker-end="url(#arrow)" />
+          <path d="M 670 232 L 670 270 L 520 300" class="arrow" marker-end="url(#arrow)" />
+          <text x="230" y="255" text-anchor="middle" class="lbl">findings[]</text>
+          <text x="670" y="255" text-anchor="middle" class="lbl">findings[]</text>
+
+          <!-- merge back in cloudlens.js -->
+          <rect class="box" x="290" y="302" width="320" height="60" rx="6" />
+          <text x="450" y="326" text-anchor="middle" class="title">cloudlens.js</text>
+          <text x="450" y="344" text-anchor="middle" class="sub-t">merges + sorts findings by priority</text>
+
+          <path d="M 450 362 L 450 396" class="arrow" marker-end="url(#arrow)" />
+
+          <!-- report generator -->
+          <rect class="box" x="290" y="398" width="320" height="60" rx="6" />
+          <text x="450" y="422" text-anchor="middle" class="title">report/generator.js</text>
+          <text x="450" y="440" text-anchor="middle" class="sub-t">builds the HTML report</text>
+
+          <path d="M 450 458 L 450 492" class="arrow" marker-end="url(#arrow)" />
+
+          <!-- output -->
+          <rect class="box-accent" x="290" y="494" width="320" height="52" rx="6" />
+          <text x="450" y="524" text-anchor="middle" class="title">cloudlens-report.html</text>
+        </svg>
+        <figcaption>
+          One CLI process runs two independent, read-only scan pipelines side by side — each provider's analyzer fans out to its own set of per-service scanners, which call that provider's real APIs
+          and return findings. <code>cloudlens.js</code> merges both results, sorts by priority, and hands them to <code>report/generator.js</code>, which writes one self-contained HTML file. (<code
+            >src/ai/briefing.js</code
+          >
+          and <code>src/aws/sns.js</code> exist in the tree but aren't wired into this flow yet.)
+        </figcaption>
+      </figure>
+
+      <footer>Generated from the current CloudLens source tree.</footer>
+    </div>
+  </body>
+</html>

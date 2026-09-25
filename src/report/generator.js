@@ -17,6 +17,7 @@ function generateReport({ findings, summary, provider, days }) {
   const pipelineCount = findings.filter((f) => f.type === 'PIPELINE_SILENT').length;
   const abandonedCount = findings.filter((f) => f.type === 'ABANDONED').length;
   const certCount = findings.filter((f) => f.type === 'CERT_EXPIRING').length;
+  const appSecretCount = findings.filter((f) => f.type === 'APP_SECRET_EXPIRING').length;
 
   const byService = {};
   for (const f of findings) byService[f.service] = (byService[f.service] || 0) + 1;
@@ -52,7 +53,8 @@ function generateReport({ findings, summary, provider, days }) {
     CDN: '#0078d4',
     'Event Hubs': '#0072c6',
     'Container Apps': '#0078d4',
-    'SQL Database': '#0078d4'
+    'SQL Database': '#0078d4',
+    'App Registrations': '#7C3AED'
   };
   const serviceIconLabel = {
     Lambda: 'λ',
@@ -83,14 +85,15 @@ function generateReport({ findings, summary, provider, days }) {
     CDN: 'CDN',
     'Event Hubs': 'EH',
     'Container Apps': 'CA',
-    'SQL Database': 'SQL'
+    'SQL Database': 'SQL',
+    'App Registrations': 'AR'
   };
 
   // ── Type grouping ──────────────────────────────────────────────────────────
   const TYPE_TO_GROUP = {
     PIPELINE_SILENT: 'PIPELINE_SILENT',
     DEPRECATED_RUNTIME: 'DEPRECATED_RUNTIME',
-    CERT_EXPIRING: 'DEPRECATED_RUNTIME',
+    CERT_EXPIRING: 'SECURITY',
     ABANDONED: 'ABANDONED',
     ANOMALY_DROP: 'ANOMALY_DROP',
     HIGH_ERROR_RATE: 'HIGH_ERROR_RATE',
@@ -131,7 +134,8 @@ function generateReport({ findings, summary, provider, days }) {
     SECRET_NO_ROTATION: 'SECURITY',
     KV_NO_SOFT_DELETE: 'GOVERNANCE',
     KV_NO_PURGE_PROTECTION: 'GOVERNANCE',
-    KV_PUBLIC_ACCESS: 'GOVERNANCE'
+    KV_PUBLIC_ACCESS: 'GOVERNANCE',
+    APP_SECRET_EXPIRING: 'SECURITY'
   };
   function typeGroupOf(t) {
     return TYPE_TO_GROUP[t] || 'OTHER';
@@ -156,6 +160,7 @@ function generateReport({ findings, summary, provider, days }) {
     const deprecatedCountV = viewFindings.filter((f) => f.type === 'DEPRECATED_RUNTIME').length;
     const pipelineCountV = viewFindings.filter((f) => f.type === 'PIPELINE_SILENT').length;
     const certCountV = viewFindings.filter((f) => f.type === 'CERT_EXPIRING').length;
+    const appSecretCountV = viewFindings.filter((f) => f.type === 'APP_SECRET_EXPIRING').length;
 
     const byServiceV = {};
     for (const f of viewFindings) byServiceV[f.service] = (byServiceV[f.service] || 0) + 1;
@@ -173,6 +178,34 @@ function generateReport({ findings, summary, provider, days }) {
 
     const tabDefsV = [
       { type: 'ALL', icon: '≡', label: 'All', desc: '', color: '#2563EB' },
+      {
+        type: 'IDLE',
+        icon: '□',
+        label: 'Idle Resources',
+        desc: 'Resources that are stopped, disabled, or have had zero actual usage for the whole scan window — genuinely not in use, so deletion is a safe recommendation.',
+        color: '#EA580C'
+      },
+      {
+        type: 'DEPRECATED_RUNTIME',
+        icon: '⚠',
+        label: 'Deprecations',
+        desc: `Functions running software versions (Node.js, Python, etc.) that ${patcherTabV} no longer patches, or has flagged for removal. These need action before their EOL deadline — unpatched vulnerabilities accumulate with no fix available.`,
+        color: '#B45309'
+      },
+      {
+        type: 'UNDERUTILIZED',
+        icon: '▽',
+        label: 'Underutilized',
+        desc: 'Resources that are still running and receiving traffic, but at a fraction of their provisioned capacity — over-allocated memory, oversized throughput units, underutilised clusters or gateways. Downscale or resize; these are still in use, so deletion is not recommended.',
+        color: '#CA8A04'
+      },
+      {
+        type: 'SECURITY',
+        icon: '⚿',
+        label: 'Security',
+        desc: 'SSL/TLS certificates and cryptographic keys nearing or past their expiration date, Azure AD app registration client secrets/certificates due for renewal, plus other resources with direct security exposure — public access, open network ingress, stale credentials, or disabled rotation. These need action before their deadline to avoid outages or exposure.',
+        color: '#7C3AED'
+      },
       {
         type: 'PIPELINE_SILENT',
         icon: '⏸',
@@ -202,20 +235,6 @@ function generateReport({ findings, summary, provider, days }) {
         color: '#DC2626'
       },
       {
-        type: 'IDLE',
-        icon: '□',
-        label: 'Idle Resources',
-        desc: 'Resources that are stopped, disabled, or have had zero actual usage for the whole scan window — genuinely not in use, so deletion is a safe recommendation.',
-        color: '#EA580C'
-      },
-      {
-        type: 'UNDERUTILIZED',
-        icon: '▽',
-        label: 'Underutilized',
-        desc: 'Resources that are still running and receiving traffic, but at a fraction of their provisioned capacity — over-allocated memory, oversized throughput units, underutilised clusters or gateways. Downscale or resize; these are still in use, so deletion is not recommended.',
-        color: '#CA8A04'
-      },
-      {
         type: 'QUEUE',
         icon: '▣',
         label: 'Queue Issues',
@@ -223,25 +242,11 @@ function generateReport({ findings, summary, provider, days }) {
         color: '#EA580C'
       },
       {
-        type: 'GOVERNANCE',
-        icon: '▤',
-        label: 'Governance',
-        desc: 'Missing resource tags, absent log retention policies, disabled soft-delete/purge protection, open network access, and other hygiene issues that affect cost attribution, security policies, and compliance requirements.',
-        color: '#64748B'
-      },
-      {
         type: 'OUTAGES',
         icon: '⛔',
         label: 'Outages',
         desc: 'Resources that were completely unavailable during the scan window — Kafka (MSK) clusters with offline partitions, and Container Apps running zero replicas. These are actual outages, not just degraded performance.',
         color: '#991B1B'
-      },
-      {
-        type: 'DEPRECATED_RUNTIME',
-        icon: '⚠',
-        label: 'Deprecations',
-        desc: `Functions running software versions (Node.js, Python, etc.) that ${patcherTabV} no longer patches, or has flagged for removal, plus SSL/TLS certificates and cryptographic keys nearing or past their expiration date. Both need action before their deadline — unpatched vulnerabilities on one side, hard TLS/crypto failures on the other.`,
-        color: '#B45309'
       }
     ];
 
@@ -305,6 +310,15 @@ function generateReport({ findings, summary, provider, days }) {
       const nearestStr = nearestDays != null ? (nearestDays < 0 ? `expired ${Math.abs(nearestDays)} day(s) ago` : `expires in ${nearestDays} day(s)`) : 'expiring soon';
       narrativePartsV.push(
         `<strong>${certCountV} certificate${certCountV > 1 ? 's' : ''}/key${certCountV > 1 ? 's' : ''} nearing expiry</strong> — must be renewed or rotated before the deadline to avoid TLS/crypto failures. Nearest: <code>${escapeHtml(nearest.resourceName)}</code>, ${nearestStr}.`
+      );
+    }
+    if (appSecretCountV > 0) {
+      const appSecretFindingsV = viewFindings.filter((f) => f.type === 'APP_SECRET_EXPIRING').sort((a, b) => (a.metrics?.daysUntilExpiry ?? Infinity) - (b.metrics?.daysUntilExpiry ?? Infinity));
+      const nearest = appSecretFindingsV[0];
+      const nearestDays = nearest.metrics?.daysUntilExpiry;
+      const nearestStr = nearestDays != null ? (nearestDays < 0 ? `expired ${Math.abs(nearestDays)} day(s) ago` : `expires in ${nearestDays} day(s)`) : 'expiring soon';
+      narrativePartsV.push(
+        `<strong>${appSecretCountV} app registration credential${appSecretCountV > 1 ? 's' : ''} nearing expiry</strong> — client secrets/certs must be renewed before the deadline or client-credential sign-ins fail outright. Nearest: <code>${escapeHtml(nearest.resourceName)}</code>, ${nearestStr}.`
       );
     }
 
@@ -399,6 +413,34 @@ function generateReport({ findings, summary, provider, days }) {
   const TAB_DEFS = [
     { type: 'ALL', icon: '≡', label: 'All', desc: '', color: '#2563EB' },
     {
+      type: 'IDLE',
+      icon: '□',
+      label: 'Idle Resources',
+      desc: 'Resources that are stopped, disabled, or have had zero actual usage for the whole scan window — genuinely not in use, so deletion is a safe recommendation.',
+      color: '#EA580C'
+    },
+    {
+      type: 'DEPRECATED_RUNTIME',
+      icon: '⚠',
+      label: 'Deprecations',
+      desc: `Functions running software versions (Node.js, Python, etc.) that ${patcherTab} no longer patches, or has flagged for removal. These need action before their EOL deadline — unpatched vulnerabilities accumulate with no fix available.`,
+      color: '#B45309'
+    },
+    {
+      type: 'UNDERUTILIZED',
+      icon: '▽',
+      label: 'Underutilized',
+      desc: 'Resources that are still running and receiving traffic, but at a fraction of their provisioned capacity — over-allocated memory, oversized throughput units, underutilised clusters or gateways. Downscale or resize; these are still in use, so deletion is not recommended.',
+      color: '#CA8A04'
+    },
+    {
+      type: 'SECURITY',
+      icon: '⚿',
+      label: 'Security',
+      desc: 'SSL/TLS certificates and cryptographic keys nearing or past their expiration date, Azure AD app registration client secrets/certificates due for renewal, plus other resources with direct security exposure — public access, open network ingress, stale credentials, or disabled rotation. These need action before their deadline to avoid outages or exposure.',
+      color: '#7C3AED'
+    },
+    {
       type: 'PIPELINE_SILENT',
       icon: '⏸',
       label: 'Silent Pipelines',
@@ -427,20 +469,6 @@ function generateReport({ findings, summary, provider, days }) {
       color: '#DC2626'
     },
     {
-      type: 'IDLE',
-      icon: '□',
-      label: 'Idle Resources',
-      desc: 'Resources that are stopped, disabled, or have had zero actual usage for the whole scan window — genuinely not in use, so deletion is a safe recommendation.',
-      color: '#EA580C'
-    },
-    {
-      type: 'UNDERUTILIZED',
-      icon: '▽',
-      label: 'Underutilized',
-      desc: 'Resources that are still running and receiving traffic, but at a fraction of their provisioned capacity — over-allocated memory, oversized throughput units, underutilised clusters or gateways. Downscale or resize; these are still in use, so deletion is not recommended.',
-      color: '#CA8A04'
-    },
-    {
       type: 'QUEUE',
       icon: '▣',
       label: 'Queue Issues',
@@ -448,25 +476,11 @@ function generateReport({ findings, summary, provider, days }) {
       color: '#EA580C'
     },
     {
-      type: 'GOVERNANCE',
-      icon: '▤',
-      label: 'Governance',
-      desc: 'Missing resource tags, absent log retention policies, disabled soft-delete/purge protection, open network access, and other hygiene issues that affect cost attribution, security policies, and compliance requirements.',
-      color: '#64748B'
-    },
-    {
       type: 'OUTAGES',
       icon: '⛔',
       label: 'Outages',
       desc: 'Resources that were completely unavailable during the scan window — Kafka (MSK) clusters with offline partitions, and Container Apps running zero replicas. These are actual outages, not just degraded performance.',
       color: '#991B1B'
-    },
-    {
-      type: 'DEPRECATED_RUNTIME',
-      icon: '⚠',
-      label: 'Deprecations',
-      desc: `Functions running software versions (Node.js, Python, etc.) that ${patcherTab} no longer patches, or has flagged for removal, plus SSL/TLS certificates and cryptographic keys nearing or past their expiration date. Both need action before their deadline — unpatched vulnerabilities on one side, hard TLS/crypto failures on the other.`,
-      color: '#B45309'
     }
   ];
 
@@ -568,7 +582,9 @@ function generateReport({ findings, summary, provider, days }) {
       "This vault's network ACLs default to allowing access from any public IP. Secrets, keys, and certificates are reachable over the public internet unless narrowed by an explicit allow-list, virtual network rule, or private endpoint.",
     NAT_IDLE: 'This NAT Gateway processed minimal or no traffic over the window. NAT Gateways bill a fixed hourly charge regardless of traffic volume, so an idle gateway is a fixed, avoidable cost.',
     NAT_LOW_UTILISATION:
-      "This NAT Gateway is seeing low outbound traffic relative to a dedicated gateway's fixed cost. Consider consolidating with another subnet's gateway if this level of usage persists."
+      "This NAT Gateway is seeing low outbound traffic relative to a dedicated gateway's fixed cost. Consider consolidating with another subnet's gateway if this level of usage persists.",
+    APP_SECRET_EXPIRING:
+      'This Azure AD (Entra ID) app registration has a client secret or certificate credential at or past its expiration date. Once expired, every application or service authenticating as this app via client credentials fails sign-in outright — this is an outage risk, not just a security-audit finding.'
   };
 
   // Explain text for a finding's own provider — matters once a report can mix AWS and
@@ -630,6 +646,15 @@ function generateReport({ findings, summary, provider, days }) {
     const nearestStr = nearestDays != null ? (nearestDays < 0 ? `expired ${Math.abs(nearestDays)} day(s) ago` : `expires in ${nearestDays} day(s)`) : 'expiring soon';
     narrativeParts.push(
       `<strong>${certCount} certificate${certCount > 1 ? 's' : ''}/key${certCount > 1 ? 's' : ''} nearing expiry</strong> — must be renewed or rotated before the deadline to avoid TLS/crypto failures. Nearest: <code>${escapeHtml(nearest.resourceName)}</code>, ${nearestStr}.`
+    );
+  }
+  if (appSecretCount > 0) {
+    const appSecretFindings = findings.filter((f) => f.type === 'APP_SECRET_EXPIRING').sort((a, b) => (a.metrics?.daysUntilExpiry ?? Infinity) - (b.metrics?.daysUntilExpiry ?? Infinity));
+    const nearest = appSecretFindings[0];
+    const nearestDays = nearest.metrics?.daysUntilExpiry;
+    const nearestStr = nearestDays != null ? (nearestDays < 0 ? `expired ${Math.abs(nearestDays)} day(s) ago` : `expires in ${nearestDays} day(s)`) : 'expiring soon';
+    narrativeParts.push(
+      `<strong>${appSecretCount} app registration credential${appSecretCount > 1 ? 's' : ''} nearing expiry</strong> — client secrets/certs must be renewed before the deadline or client-credential sign-ins fail outright. Nearest: <code>${escapeHtml(nearest.resourceName)}</code>, ${nearestStr}.`
     );
   }
 
@@ -780,7 +805,8 @@ function generateReport({ findings, summary, provider, days }) {
       KV_NO_PURGE_PROTECTION: 'No Purge Protection',
       KV_PUBLIC_ACCESS: 'Public Network Access',
       NAT_IDLE: 'Idle Gateway',
-      NAT_LOW_UTILISATION: 'Low Utilisation'
+      NAT_LOW_UTILISATION: 'Low Utilisation',
+      APP_SECRET_EXPIRING: 'App Secret Expiring'
     };
     return labels[type] || type.replace(/_/g, ' ');
   }
@@ -987,9 +1013,13 @@ function generateReport({ findings, summary, provider, days }) {
     .action-btn.green:hover { background: #DCFCE7; }
 
     /* ── Table ── */
-    .table-wrap { background: var(--surface); border: 1px solid var(--border); border-top: none; border-radius: 0 0 var(--radius) var(--radius); overflow: hidden; box-shadow: var(--shadow); }
-    table { width: 100%; border-collapse: collapse; }
+    .table-wrap { background: var(--surface); border: 1px solid var(--border); border-top: none; border-radius: 0 0 var(--radius) var(--radius); overflow-x: auto; box-shadow: var(--shadow); }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
     thead th { background: var(--surface-2); padding: 0.65rem 1rem; text-align: left; font-weight: 700; color: var(--muted); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; border-bottom: 1px solid var(--border); }
+    thead th.sortable-th { cursor: pointer; user-select: none; transition: color 0.12s; }
+    thead th.sortable-th:hover { color: var(--text-2); }
+    thead th.sortable-th.sorted { color: var(--blue); }
+    .sort-arrow { font-size: 0.65rem; display: inline-block; width: 0.8em; }
     tbody tr.finding-row { border-top: 1px solid var(--border); cursor: pointer; transition: background 0.1s; border-left: 3px solid transparent; }
     tbody tr.finding-row[data-priority="HIGH"]   { border-left-color: var(--high); }
     tbody tr.finding-row[data-priority="MEDIUM"] { border-left-color: var(--medium); }
@@ -1011,6 +1041,7 @@ function generateReport({ findings, summary, provider, days }) {
     .badge-type-PIPELINE_SILENT    { background: #FFEDD5; color: #C2410C; border-color: #FED7AA; }
     .badge-type-DEPRECATED_RUNTIME { background: #FEE2E2; color: #B91C1C; border-color: #FECACA; }
     .badge-type-CERT_EXPIRING      { background: #FEF3C7; color: #B45309; border-color: #FDE68A; }
+    .badge-type-APP_SECRET_EXPIRING { background: #EDE9FE; color: #6D28D9; border-color: #DDD6FE; }
     .badge-type-ABANDONED          { background: #FEE2E2; color: #991B1B; border-color: #FCA5A5; font-weight: 800; }
     .badge-type-MISSING_TAGS       { background: var(--surface-2); color: var(--muted); border-color: var(--border); }
 
@@ -1075,6 +1106,22 @@ function generateReport({ findings, summary, provider, days }) {
     .no-findings { text-align: center; padding: 3rem; color: var(--muted); font-size: 0.9rem; }
 
     footer { text-align: center; padding: 1.25rem; color: var(--muted); font-size: 0.72rem; border-top: 1px solid var(--border); margin-top: 2rem; }
+
+    /* ── Responsive (narrow browser windows) ── */
+    @media (max-width: 960px) {
+      .container { padding: 1.25rem 1rem; }
+      .header { flex-wrap: wrap; height: auto; padding: 0.75rem 1.25rem; gap: 0.5rem 1rem; }
+      .header-meta { flex-wrap: wrap; gap: 0.5rem 1rem; }
+      .summary-bar { flex-wrap: wrap; }
+      .sum-item { flex: 1 1 45%; min-width: 140px; border-right: none; border-bottom: 1px solid var(--border); }
+      .services-row { flex-direction: column; }
+      .service-tiles { width: 100%; }
+      .chart-card { width: 100%; }
+      .detail-content { grid-template-columns: 1fr; gap: 1.25rem; }
+      .toolbar { flex-direction: column; align-items: stretch; }
+      .filter-group { flex-wrap: wrap; }
+      .results-count { margin-left: 0; }
+    }
 
     /* ── Print / PDF ── */
     @media print {
@@ -1178,7 +1225,9 @@ function generateReport({ findings, summary, provider, days }) {
         : `<table id="findings-table">
           <thead><tr>
             <th>Priority</th><th>Service</th><th>Resource</th>
-            <th>Finding Type</th><th>Details</th><th>Savings</th><th></th>
+            <th>Finding Type</th><th>Details</th>
+            <th class="sortable-th" id="th-savings" onclick="sortBySavings()" title="Sort by cost">Savings <span class="sort-arrow" id="sort-arrow-savings"></span></th>
+            <th></th>
           </tr></thead>
           <tbody>${findingsRowsHTML}</tbody>
         </table>
@@ -1220,6 +1269,7 @@ function generateReport({ findings, summary, provider, days }) {
   var activeTypeFilter  = 'ALL';
   var activeCloudFilter = 'ALL';
   var activeSearch      = '';
+  var savingsSortDir    = null; // null | 'desc' | 'asc'
 
   ${isBoth ? `var cloudViews = ${JSON.stringify(cloudViews)};` : ''}
 
@@ -1299,6 +1349,29 @@ function generateReport({ findings, summary, provider, days }) {
       bar.classList.add('visible');
     }
     renderVisibility();
+    updatePriorityCounts();
+    // Idle Resources is where "which one is costing me the most" matters most —
+    // land on it pre-sorted highest-cost-first instead of making the user find
+    // and click the Savings header themselves.
+    if (type === 'IDLE') applyCostSort('desc');
+  }
+
+  // High/Med/Low counts next to the priority buttons — scoped to whichever
+  // type tab (Idle Resources, Security, ...) and cloud filter are active, so
+  // they reflect what's actually in view instead of the grand total.
+  function updatePriorityCounts() {
+    var high = 0, med = 0, low = 0;
+    allFindings.forEach(function(f) {
+      var matchType  = activeTypeFilter  === 'ALL' || activeTypeFilter  === f.typegroup;
+      var matchCloud = activeCloudFilter === 'ALL' || activeCloudFilter === f.provider;
+      if (!matchType || !matchCloud) return;
+      if (f.priority === 'HIGH') high++;
+      else if (f.priority === 'MEDIUM') med++;
+      else if (f.priority === 'LOW') low++;
+    });
+    var ch = document.getElementById('count-high');   if (ch) ch.textContent = high;
+    var cm = document.getElementById('count-medium'); if (cm) cm.textContent = med;
+    var cl = document.getElementById('count-low');    if (cl) cl.textContent = low;
   }
 
   // ── Priority & env filters ────────────────────────────────────────────────
@@ -1371,12 +1444,36 @@ function generateReport({ findings, summary, provider, days }) {
       var bar = document.getElementById('type-desc-bar');
       if (bar) { bar.classList.remove('visible'); bar.textContent = ''; }
       renderVisibility();
+      updatePriorityCounts();
     }
     if (cloudChanged) {
       animateSwap(document.getElementById('main-content'), function() { applyCloudView('all'); afterScope(); });
     } else {
       afterScope();
     }
+  }
+
+  // ── Sort by cost (Savings column) — reorders the finding/detail row pairs
+  // in the DOM. Works within whatever tab/filter is active (e.g. the Idle
+  // Resources tab), since filtering only toggles visibility, not row order.
+  function applyCostSort(dir) {
+    var tbody = document.querySelector('#findings-table tbody');
+    var th    = document.getElementById('th-savings');
+    var arrow = document.getElementById('sort-arrow-savings');
+    if (!tbody) return;
+    savingsSortDir = dir;
+    var pairs = allFindings.map(function(f) {
+      return { savings: f.savings, frow: document.getElementById('frow-' + f.idx), drow: document.getElementById('detail-' + f.idx) };
+    }).filter(function(p) { return p.frow && p.drow; });
+    pairs.sort(function(a, b) {
+      return savingsSortDir === 'desc' ? (b.savings - a.savings) : (a.savings - b.savings);
+    });
+    pairs.forEach(function(p) { tbody.appendChild(p.frow); tbody.appendChild(p.drow); });
+    if (th) th.classList.add('sorted');
+    if (arrow) arrow.textContent = savingsSortDir === 'desc' ? '▼' : '▲';
+  }
+  function sortBySavings() {
+    applyCostSort(savingsSortDir === 'desc' ? 'asc' : 'desc');
   }
 
   // ── Render visibility + result count ─────────────────────────────────────

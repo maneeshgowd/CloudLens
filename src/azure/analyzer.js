@@ -47,6 +47,7 @@ const { analyzeEventHubs }       = require('./eventhubs');
 const { analyzeContainerApps }   = require('./containerapps');
 const { analyzeSqlDatabase }     = require('./sqldatabase');
 const { analyzeCertificates }    = require('./certificates');
+const { analyzeAppRegistrations } = require('./appregistrations');
 const { computeCostContext }     = require('./localcosts');
 const { buildAzureCredential }   = require('./credentials');
 
@@ -98,6 +99,11 @@ const SERVICE_ALIASES = {
   certs:              'ssl certificates',
   'ssl-certificates': 'ssl certificates',
   ssl:                'ssl certificates',
+  appregistrations:   'app registrations',
+  'app-registrations':'app registrations',
+  approg:             'app registrations',
+  apps:               'app registrations',
+  entra:              'app registrations',
 };
 
 async function analyzeAzure({ subscriptionId, tenantId, clientId, clientSecret, location, days, filter, exclude = [], include = [] }) {
@@ -131,6 +137,7 @@ async function analyzeAzure({ subscriptionId, tenantId, clientId, clientSecret, 
     { name: 'Container Apps',   fn: analyzeContainerApps   },
     { name: 'SQL Database',     fn: analyzeSqlDatabase     },
     { name: 'SSL Certificates', fn: analyzeCertificates    },
+    { name: 'App Registrations', fn: analyzeAppRegistrations },
   ].filter(({ name }) => (included.size === 0 || included.has(name.toLowerCase())) && !excluded.has(name.toLowerCase()));
 
   const findings = [];
